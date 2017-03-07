@@ -158,6 +158,7 @@ Actually the boot loader consists of 2 source: `boot/boot.S` and `boot/main.c`
 **What boot loader does**
 - switches the processor from `real mode` to `32-bit protected mode`
 - reads the kernel from the hard disk
+- transfers control to kernel
 
 **Why 32-bit Protected Mode**
 
@@ -180,7 +181,7 @@ The 80386 introduced 32-bit protected mode. There are two major differences betw
 
 The paragraphs are quoted from sections 1.2.7 and 1.2.8 [PC Assembly Language](https://pdos.csail.mit.edu/6.828/2014/readings/pcasm-book.pdf), Or you may refer to Intel architecture manuals.
 
-**In a word, why protected mode**
+**In a word, why protected mode**       
 From 8086 to 80286, Intel introduced protected mode which enable protection to memory and other peripheral device on hardware level(by `Privilege levels` and other mechanisms to restrict memory access). On the other hand, it introduced `virtual memory`, which enable independence of physical space and logic space and raises utilization of memory. While in 80386, Intel expanded offsets to 32 bits(which allow 4G memory space) and introduced  `paging`(which raises utilization of memory more!)
 
 **Exercise 3**
@@ -196,13 +197,31 @@ In `boot.S`, the `ljmp $PROT_MODE_CSEG, $protcseg` causes the switch from 16- to
   movl    %eax, %cr0
   ljmp    $PROT_MODE_CSEG, $protcseg
 ```
-**How ljmp works**
+**How ljmp works**      
+
 To enable 32-bit protected mode, we have to prepare the GDT first(we can use the `lgdt` command), then we enable the `PE` bit on CR0.
 Note that to complete the process of loading a new GDT, the segment registers need to be reloaded. The CS register must be loaded using a far jump(You can refer to [here](https://en.wikibooks.org/wiki/X86_Assembly/Global_Descriptor_Table))
 
 For the `ljmp` instruction, In Real Address Mode or Virtual 8086 mode, the former pointer provides 16 bits for the CS register. In protected mode, the former 16-bit now works as selector. And PROT_MODE_CSEG(0x8) ensure that we still work in the same segment. The offset $protcseg is exactly the next instruction. Till now,we have switch to 32-bit mode, but we still work in the same program logic segment.
 
 **Why PROT_MODE_CSEG should be 0x8, PROT_MODE_DSEG should be 0x10**
+0x00 points at the null selector.       
+0x08 points at the code selector.       
+0x10 points at the data selector.     
+
+```
+# Bootstrap GDT
+.p2align 2                               # force 4 byte alignment
+gdt:
+  SEG_NULL                               # null seg
+  SEG(STA_X|STA_R, 0x0, 0xffffffff)      # code seg
+  SEG(STA_W, 0x0, 0xffffffff)            # data seg
+
+gdtdesc:
+  .word   0x17                           # sizeof(gdt) - 1
+  .long   gdt                            # address gdt
+```
+Actually, null segment, code segment and data segment all start at 0x0, their limit are 0xffffffff(4G).
 
 
 **Question: Before enabling protected mode, we are still at 16-bit real mode, why can we use 32-bit register eax?**
@@ -219,6 +238,7 @@ in `obj/boot/boot.asm`, it's
 ```
 7d6b:   ff 15 18 00 01 00       call   *0x10018
 ```
+After this instruction, the boot loader transfers control to the kernel.
 
 >Q: and what is the first instruction of the kernel it just loaded?
 
@@ -253,9 +273,146 @@ The boot loader read the first page(after boot sector, the kernel start at secto
          readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
 ```
 ![elf](assets/elf.png)
+
 As we can see, An ELF file has two views: the program header shows the segments used at run-time, whereas the section header lists the set of sections of the binary. We now only focus on run-time view.
 
 ### Loading the Kernel
+
+> **link address(VMA)**
+The link address of a section is the memory address from which the section expects to execute.
+> **load address(LMA)**
+The load address of a section is the memory address at which that section should be loaded into memory.
+
+- program header table of `obj/boot/boot.out`
+
+```
+start address 0x00007c00
+
+Program Header:
+    LOAD off    0x00000074 vaddr 0x00007c00 paddr 0x00007c00 align 2**2
+         filesz 0x00000230 memsz 0x00000230 flags rwx
+   STACK off    0x00000000 vaddr 0x00000000 paddr 0x00000000 align 2**4
+         filesz 0x00000000 memsz 0x00000000 flags rwx
+```
+
+- program header table of `obj/kern/kernel`
+```
+start address 0x0010000c
+
+Program Header:
+    LOAD off    0x00001000 vaddr 0xf0100000 paddr 0x00100000 align 2**12
+         filesz 0x0000712f memsz 0x0000712f flags r-x
+    LOAD off    0x00009000 vaddr 0xf0108000 paddr 0x00108000 align 2**12
+         filesz 0x0000a300 memsz 0x0000a944 flags rw-
+   STACK off    0x00000000 vaddr 0x00000000 paddr 0x00000000 align 2**4
+         filesz 0x00000000 memsz 0x00000000 flags rwx
+```
+
+we can see that for boot, the link address is the same with the load address. However, for the kernel, the link address is different with the load address.
+
+**Exercise 5**
+---
+
+>Q: Trace through the first few instructions of the boot loader again and identify the first instruction that would "break" or otherwise do the wrong thing if you were to get the boot loader's link address wrong. Then change the link address in boot/Makefrag to something wrong, run make clean, recompile the lab with make, and trace into the boot loader again to see what happens. Don't forget to change the link address back and make clean again afterward!
+
+we changed the boot loader's link address in boot/Makefrag from 0x7c00 t0 0x7e00 and recompile the lab. Here is the boot/boot.asm
+```
+00007e00 <start>:
+.set CR0_PE_ON,      0x1         # protected mode enable flag
+
+.globl start
+start:
+  .code16                     # Assemble for 16-bit mode
+  cli                         # Disable interrupts
+    7e00:	fa                   	cli    
+  cld                         # String operations increment
+    7e01:	fc                   	cld    
+
+  # Set up the important data segment registers (DS, ES, SS).
+  xorw    %ax,%ax             # Segment number zero
+    7e02:	31 c0                	xor    %eax,%eax
+  movw    %ax,%ds             # -> Data Segment
+    7e04:	8e d8                	mov    %eax,%ds
+  movw    %ax,%es             # -> Extra Segment
+    7e06:	8e c0                	mov    %eax,%es
+  movw    %ax,%ss             # -> Stack Segment
+    7e08:	8e d0                	mov    %eax,%ss
+```
+We can see that the start address of the boot have been changed to 0x7e00. But BIOS still load the boot loader to 0x7c00. We set a breakpoint at 0x7c00.
+```shell
+(gdb) b *0x7c00
+Breakpoint 1 at 0x7c00
+(gdb) c
+Continuing.
+[   0:7c00] => 0x7c00:	cli    
+
+Breakpoint 1, 0x00007c00 in ?? ()
+(gdb) si
+[   0:7c01] => 0x7c01:	cld  
+```
+As we can see, since BIOS still load the boot loader to 0x7c00, the first few instruction still work. However, when it comes to address reference at `lgdt` instruction, it would do the wrong thing.
+```
+(gdb) si
+[   0:7c1e] => 0x7c1e:	lgdtw  0x7e64
+0x00007c1e in ?? ()
+(gdb) x/6xb 0x7e64
+0x7e64:	0x00	0x00	0x00	0x00	0x00	0x00
+(gdb) x/6xb 0x7c64
+0x7c64:	0x17	0x00	0x4c	0x7e	0x00	0x00
+```
+As we have talked above, lgdt instruction loads the gdtdesc to GDTR. However, when we check the 6B at 0x7e64, they are all 0. But 0x7c64 shows the right value. After this instruction, we have an incorrect GDT. Continuing Stepping, we got
+```
+0x7c1e:	lgdtw  0x7e64
+=> 0x7c23:	mov    %cr0,%eax
+0x7c26:	or     $0x1,%eax
+0x7c2a:	mov    %eax,%cr0
+0x7c2d:	ljmp   $0x8,$0x7e32
+0x7c32:	mov    $0xd88e0010,%eax
+0x7c38:	mov    %ax,%es
+0x7c3a:	mov    %ax,%fs
+0x7c3c:	mov    %ax,%gs
+0x7c3e:	mov    %ax,%ss
+0x7c40:	mov    $0x7e00,%sp
+0x7c43:	add    %al,(%bx,%si)
+0x7c45:	call   0x7d13
+0x7c48:	add    %al,(%bx,%si)
+(gdb) si
+[   0:7c26] => 0x7c26:	or     $0x1,%eax
+0x00007c26 in ?? ()
+(gdb) si
+[   0:7c2a] => 0x7c2a:	mov    %eax,%cr0
+0x00007c2a in ?? ()
+(gdb) si
+[   0:7c2d] => 0x7c2d:	ljmp   $0x8,$0x7e32
+0x00007c2d in ?? ()
+(gdb) si
+[f000:e05b]    0xfe05b:	cmpl   $0x0,%cs:0x6c48
+0x0000e05b in ?? ()
+(gdb) si
+[f000:e062]    0xfe062:	jne    0xfd2e1
+```
+After the `ljmp   $0x8,$0x7e32`, things go totally wrong!
+
+**Exercise 6**
+---
+
+> Q: Examine the 8 words of memory at 0x00100000 at the point the BIOS enters the boot loader, and then again at the point the boot loader enters the kernel. Why are they different? What is there at the second breakpoint?
+
+Before the BIOS enters the boot loader
+```
+(gdb) x/8x 0x100000
+0x100000:	0x00000000	0x00000000	0x00000000	0x00000000
+0x100010:	0x00000000	0x00000000	0x00000000	0x00000000
+```
+
+Before the boot loader enters the kernel
+```
+(gdb) x/8x 0x100000
+0x100000:	0x1badb002	0x00000000	0xe4524ffe	0x7205c766
+0x100010:	0x34000004	0x0000b812	0x220f0011	0xc0200fd8
+```
+
+Because the boot loader loads the kernel to 0x100000
 
 ## The Kernel
 
