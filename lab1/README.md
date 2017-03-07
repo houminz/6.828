@@ -1,5 +1,5 @@
 # Report for lab1, Houmin Wei
----
+
 
 ## Environment Configuration
 
@@ -123,7 +123,144 @@ K>
 ```
 
 ### The ROM BIOS
+```
+[f000:fff0] 0xffff0:	ljmp   $0xf000,$0xe05b
+```
+With GDB, we know `ljmp` the first instruction to be executed after power-up, i.e.
+
+- The IBM PC starts executing at physical address 0x000ffff0, which is at the very top of the 64KB area reserved for the ROM BIOS.
+- The PC starts executing with CS = 0xf000 and IP = 0xfff0.
+- The first instruction to be executed is a jmp instruction, which jumps to the segmented address CS = 0xf000 and IP = 0xe05b.
+
+At this time, we are still in the `real mode`, so address translation works according to the formula
+```
+physical address = 16 * segment + offset
+```
+
+**What BIOS does**
+- sets up an interrupt descriptor table
+- initializes various devices such as the VGA display
+- searches for a bootable device such as a floppy, hard drive, or CD-ROM
+- when it finds a bootable disk, the BIOS reads the `boot loader` from the disk and transfers control to it
 
 ## The Boot Loader
 
+So **What is `boot loader`**, according to [wikipedia](https://en.wikipedia.org/wiki/Booting)
+>A boot loader is a computer program that loads an operating system or some other system software for the computer after completion of the power-on self-tests; it is the loader for the operating system itself. Within the hard reboot process, it runs after completion of the self-tests, then loads and runs the software.
+
+In the conventional hard drive boot mechanism(which we use here), the boot loader(obj/boot/boot) resides in the first sector of our boot device, which we also call `boot sector`. After finishing its work, BIOS loads the 512-byte boot sector into memory at physical addresses 0x7c00 through 0x7dff, then uses a  `jmp` instruction to set the CS:IP to 0000:7c00, passing control to the boot loader.
+
+**Why 0x7c00**      
+The magic number 0x7c00 is the result of intresesting history reasons, You can refer to [here](https://www.glamenv-septzen.net/en/view/6) .
+
+Actually the boot loader consists of 2 source: `boot/boot.S` and `boot/main.c`
+
+**What boot loader does**
+- switches the processor from `real mode` to `32-bit protected mode`
+- reads the kernel from the hard disk
+
+**Why 32-bit Protected Mode**
+
+In `real mode`, memory is limited to only 1MB. Valid address range from 0x00000 to 0xFFFFF, this requires a 20-bit number, which will not fit to any of 8086's 16-bit registers. Intel solved this problem by `segment:offset` pair we talked above. However, real segmented address have disadvantages:
+- A sigle segment can only refer to **64K** of memory(16 bit of offset).
+  When a program has more than 64K of code, the program must be split into sections(called *segments*) and the value of CS must be changed. Similar problem occur with large amounts of data and the DS register. This can be very awkward.
+- Each byte in memory does not have an unique segmented address. The physical address 04808 can be referenced by 047C:0048, 047D:0038, 047E:0028 or 047B:0058. This can complicate the comparison of segmented addresses
+
+In 80286, Intel invented `16-bit protected mode`. We still use the `selector:offset` pair to realize address translation. However, the former of the pair is not called `segment` any more, it's now called `selector`. In real mode, the former value of the pair is a paragraph number of physical memory. In protected mode, a selector value is an `index` into a `descriptor table`.  In both modes, programs are divided into segments. In real mode, these segments are at fixed positions in physical memory and the selector value denotes the paragraph number of the beginning of the segment. In protected mode, the segments are not at fixed positions in physical memory. In fact, they do not have to be in memory at all!
+
+Protected mode uses a technique called `virtual memory`. In 16-bit protected mode, segments are moved between memory and disk as needed. All of this is done transparently by the operating system. The program does not have to be written differently for virtual memory to work.
+
+In protected mode, each segment is assigned an entry in a descriptor table. This entry has all the information that the system needs to know about the segment. This information includes: is it currently in memory; if in memory, where is it; access permissions (e.g., read-only). The index of the entry of the segment is the selector value that is stored in segment registers.
+
+One big disadvantage of 16-bit protected mode is that *offsets are still 16-bit quantities*. As a consequence of this, segment sizes are still limited to at most 64K. This makes the use of large arrays problematic!
+
+The 80386 introduced 32-bit protected mode. There are two major differences between 386 32-bit and 286 16-bit protected modes:
+- Offsets are expanded to be 32-bits. Thus, segments can have sizes up to 4GB.
+- Segments can be divided into smaller 4K-sized units called `pages`. The virtual memory system works with pages now instead of segments. This means that only parts of segment may be in memory at any one time. In 286 16-bit mode, either the entire segment is in memory or none of it is. This is not practical with the larger segments that 32-bit mode allows.
+
+The paragraphs are quoted from sections 1.2.7 and 1.2.8 [PC Assembly Language](https://pdos.csail.mit.edu/6.828/2014/readings/pcasm-book.pdf), Or you may refer to Intel architecture manuals.
+
+**In a word, why protected mode**
+From 8086 to 80286, Intel introduced protected mode which enable protection to memory and other peripheral device on hardware level(by `Privilege levels` and other mechanisms to restrict memory access). On the other hand, it introduced `virtual memory`, which enable independence of physical space and logic space and raises utilization of memory. While in 80386, Intel expanded offsets to 32 bits(which allow 4G memory space) and introduced  `paging`(which raises utilization of memory more!)
+
+**Exercise 3**
+---
+
+>Q: At what point does the processor start executing 32-bit code? What exactly causes the switch from 16- to 32-bit mode?
+
+In `boot.S`, the `ljmp $PROT_MODE_CSEG, $protcseg` causes the switch from 16- to 32-bit mode in the boot.S:
+```
+  lgdt    gdtdesc
+  movl    %cr0, %eax
+  orl     $CR0_PE_ON, %eax
+  movl    %eax, %cr0
+  ljmp    $PROT_MODE_CSEG, $protcseg
+```
+**How ljmp works**
+To enable 32-bit protected mode, we have to prepare the GDT first(we can use the `lgdt` command), then we enable the `PE` bit on CR0.
+Note that to complete the process of loading a new GDT, the segment registers need to be reloaded. The CS register must be loaded using a far jump(You can refer to [here](https://en.wikibooks.org/wiki/X86_Assembly/Global_Descriptor_Table))
+
+For the `ljmp` instruction, In Real Address Mode or Virtual 8086 mode, the former pointer provides 16 bits for the CS register. In protected mode, the former 16-bit now works as selector. And PROT_MODE_CSEG(0x8) ensure that we still work in the same segment. The offset $protcseg is exactly the next instruction. Till now,we have switch to 32-bit mode, but we still work in the same program logic segment.
+
+**Why PROT_MODE_CSEG should be 0x8, PROT_MODE_DSEG should be 0x10**
+
+
+**Question: Before enabling protected mode, we are still at 16-bit real mode, why can we use 32-bit register eax?**
+
+
+>Q: What is the last instruction of the boot loader executed
+
+In `main.c`, it's
+```c
+((void (*)(void)) (ELFHDR->e_entry))();
+```
+
+in `obj/boot/boot.asm`, it's
+```
+7d6b:   ff 15 18 00 01 00       call   *0x10018
+```
+
+>Q: and what is the first instruction of the kernel it just loaded?
+
+In `entry.S`, it's
+```
+movw    $0x1234,0x472           # warm boot
+```
+
+In `obj/kern/kernel.asm`, it's
+```
+f010000c:   66 c7 05 72 04 00 00    movw   $0x1234,0x472
+```
+
+>Q: Where is the first instruction of the kernel?
+
+Since the last instruction the boot loader executed is `call *0x10018`, the first instruction of the kernel should be at `*0x10018`. Examine `*0x10018` using gdb:
+```
+(gdb) x/1x 0x10018
+0x10018:	0x0010000c
+```
+
+>Q: How does the boot loader decide how many sectors it must read in order to fetch the entire kernel from disk? Where does it find this information?
+
+The boot loader read the first page(after boot sector, the kernel start at sector 1) of the disk image. Then, it reads the `program head table` to get all the program segment information. Last, it loads each of the segment to its  `ph->ppa` address. *p_pa is the load address of this segment (as well as the physical address)*
+```c
+     // load each program segment (ignores ph flags)
+     ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
+     eph = ph + ELFHDR->e_phnum;
+     for (; ph < eph; ph++)
+         // p_pa is the load address of this segment (as well
+         // as the physical address)
+         readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
+```
+![elf](assets/elf.png)
+As we can see, An ELF file has two views: the program header shows the segments used at run-time, whereas the section header lists the set of sections of the binary. We now only focus on run-time view.
+
+### Loading the Kernel
+
 ## The Kernel
+
+### Using virtual memory to work around position dependence
+
+### Formatted Printing to the Console
+
+### The Stack
