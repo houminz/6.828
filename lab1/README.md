@@ -624,3 +624,173 @@ cprintf("Type 'help' for a list of commands.\n");
 ```
 
 ### The Stack
+
+**Exercise 9**
+---
+>Q: Determine where the kernel initializes its stack, and exactly where in memory its stack is located. How does the kernel reserve space for its stack? And at which "end" of this reserved area is the stack pointer initialized to point to?
+
+In the `entry.S`
+```
+# Clear the frame pointer register (EBP)
+# so that once we get into debugging C code,
+# stack backtraces will be terminated properly.
+movl  $0x0,%ebp     # nuke frame pointer
+
+# Set the stack pointer
+movl  $(bootstacktop),%esp
+
+```
+
+In obj/kern/kernel.asm
+```
+# Clear the frame pointer register (EBP)
+# so that once we get into debugging C code,
+# stack backtraces will be terminated properly.
+movl	$0x0,%ebp			# nuke frame pointer
+f010002f:	bd 00 00 00 00       	mov    $0x0,%ebp
+
+# Set the stack pointer
+movl	$(bootstacktop),%esp
+f0100034:	bc 00 00 11 f0       	mov    $0xf0110000,%esp
+```
+
+So, the stack starts at 0xf0110000, its range is 0xf0108000-0xf0110000.
+
+**Exercise 10**
+---
+>Q: To become familiar with the C calling conventions on the x86, find the address of the test_backtrace function in obj/kern/kernel.asm, set a breakpoint there, and examine what happens each time it gets called after the kernel starts. How many 32-bit words does each recursive nesting level of test_backtrace push on the stack, and what are those words?
+Note that, for this exercise to work properly, you should be using the patched version of QEMU available on the tools page or on Athena. Otherwise, you'll have to manually translate all breakpoint and memory addresses to linear addresses.
+
+Before test_backtrace(5), we push the function parameter to stack, then we push the return address to stack. Above all, we are still at the caller-stack. Next, we enter C calling conventions
+```
+           push   %ebp
+           mov    %esp,%ebp
+           push   %ebx
+           sub    $0xc,%esp
+```
+These belong to the callee-stack.
+
+**Exercise 11**
+---
+
+>Q: Implement the backtrace function as specified above and hook this new function into the kernel monitor's command list
+
+```
+int
+mon_backtrace(int argc, char **argv, struct Trapframe *tf)
+{
+	// Your code here.
+	unsigned int *ebp = ((unsigned int*)read_ebp());
+	cprintf("Stack backtrace:\n");
+	while(ebp) {
+		cprintf("ebp %08x ", ebp);
+		cprintf("eip %08x args", ebp[1]);
+		for(int i = 2; i <= 6; i++)
+			cprintf(" %08x", ebp[i]);
+		cprintf("\n");
+		ebp = (unsigned int*)(*ebp);
+	}
+	return 0;
+}
+```
+
+Here is the result:
+```
+6828 decimal is 15254 octal!
+entering test_backtrace 5
+entering test_backtrace 4
+entering test_backtrace 3
+entering test_backtrace 2
+entering test_backtrace 1
+entering test_backtrace 0
+Stack backtrace:
+ebp f010ff18 eip f010007b args 00000000 00000000 00000000 00000000 f010093f
+ebp f010ff38 eip f0100068 args 00000000 00000001 f010ff78 00000000 f010093f
+ebp f010ff58 eip f0100068 args 00000001 00000002 f010ff98 00000000 f010093f
+ebp f010ff78 eip f0100068 args 00000002 00000003 f010ffb8 00000000 f010093f
+ebp f010ff98 eip f0100068 args 00000003 00000004 00000000 00000000 00000000
+ebp f010ffb8 eip f0100068 args 00000004 00000005 00000000 00010094 00010094
+ebp f010ffd8 eip f01000d4 args 00000005 00001aac 00000648 00000000 00000000
+ebp f010fff8 eip f010003e args 00111021 00000000 00000000 00000000 00000000
+leaving test_backtrace 0
+leaving test_backtrace 1
+leaving test_backtrace 2
+leaving test_backtrace 3
+leaving test_backtrace 4
+leaving test_backtrace 5
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+blue
+green
+red
+```
+**Exercise 12**
+---
+
+>Q: Modify your stack backtrace function to display, for each eip, the function name, source file name, and line number corresponding to that eip.
+
+In This Question, we know the eip(the return address), and we want to know which function this eip belong to, which file this function belong to. And which line this eip in the file.
+
+To get all this info, we need get the debug info `Eipdebuginfo`, this struct stores all the information we need.
+```
+// Debug information about a particular instruction pointer
+struct Eipdebuginfo {
+	const char *eip_file;		// Source code filename for EIP
+	int eip_line;			// Source code linenumber for EIP
+
+	const char *eip_fn_name;	// Name of function containing EIP
+					//  - Note: not null terminated!
+	int eip_fn_namelen;		// Length of function name
+	uintptr_t eip_fn_addr;		// Address of start of function
+	int eip_fn_narg;		// Number of function arguments
+};
+```
+
+To get this struct, we need the `debuginfo_eip(addr, info)` function. This function search the `STAB` table to Fill in the 'info' structure with information about the specified instruction address, 'addr'. The debuginfo_eip function has been given in `kdebug.c`, we just need to add this.
+```c
+// Your code here.
+stab_binsearch(stabs, &lline, &rline, N_SLINE, addr);
+info->eip_line = stabs[lline].n_desc;
+```
+
+In `monitor.c`
+```
+int
+mon_backtrace(int argc, char **argv, struct Trapframe *tf)
+{
+	// Your code here.
+	unsigned int *ebp = ((unsigned int*)read_ebp());
+	cprintf("Stack backtrace:\n");
+
+	while(ebp) {
+		cprintf("ebp %08x ", ebp);
+		cprintf("eip %08x args", ebp[1]);
+		for(int i = 2; i <= 6; i++)
+			cprintf(" %08x", ebp[i]);
+		cprintf("\n");
+
+		unsigned int eip = ebp[1];
+		struct Eipdebuginfo info;
+		debuginfo_eip(eip, &info);
+		cprintf("\t%s:%d: %.*s+%d\n",
+		info.eip_file, info.eip_line,
+		info.eip_fn_namelen, info.eip_fn_name,
+		eip-info.eip_fn_addr);
+
+		ebp = (unsigned int*)(*ebp);
+	}
+	return 0;
+}
+```
+
+Finally, we got this.
+```
+running JOS: (1.1s)
+  printf: OK
+  backtrace count: OK
+  backtrace arguments: OK
+  backtrace symbols: OK
+  backtrace lines: OK
+Score: 50/50
+```
+## This Complete The Lab.

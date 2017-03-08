@@ -1,0 +1,41 @@
+*** Now run 'make gdb'.
+***
+WARNING: Image format was not specified for 'obj/kern/kernel.img' and probing guessed raw.
+         Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+         Specify the 'raw' format explicitly to remove the restrictions.
+6828 decimal is 15254 octal!
+entering test_backtrace 5
+entering test_backtrace 4
+entering test_backtrace 3
+entering test_backtrace 2
+entering test_backtrace 1
+entering test_backtrace 0
+Stack backtrace:
+ebp f010ff18 eip f010007b args 00000000 00000000 00000000 00000000 f0100970
+	     kern/init.c:18: test_backtrace+59
+ebp f010ff38 eip f0100068 args 00000000 00000001 f010ff78 00000000 f0100970
+	     kern/init.c:16: test_backtrace+40
+ebp f010ff58 eip f0100068 args 00000001 00000002 f010ff98 00000000 f0100970
+	     kern/init.c:16: test_backtrace+40
+ebp f010ff78 eip f0100068 args 00000002 00000003 f010ffb8 00000000 f0100970
+	     kern/init.c:16: test_backtrace+40
+ebp f010ff98 eip f0100068 args 00000003 00000004 00000000 00000000 00000000
+	     kern/init.c:16: test_backtrace+40
+ebp f010ffb8 eip f0100068 args 00000004 00000005 00000000 00010094 00010094
+	     kern/init.c:16: test_backtrace+40
+ebp f010ffd8 eip f01000d4 args 00000005 00001aac 00000648 00000000 00000000
+	     kern/init.c:39: i386_init+64
+ebp f010fff8 eip f010003e args 00111021 00000000 00000000 00000000 00000000
+	     kern/entry.S:83: <unknown>+0
+leaving test_backtrace 0
+leaving test_backtrace 1
+leaving test_backtrace 2
+leaving test_backtrace 3
+leaving test_backtrace 4
+leaving test_backtrace 5
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+blue
+green
+red
+qemu: terminating on signal 15 from pid 9208
