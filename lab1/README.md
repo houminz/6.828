@@ -187,7 +187,7 @@ Actually the boot loader consists of 2 source: `boot/boot.S` and `boot/main.c`
 
 From 8086 to 80286, Intel introduced protected mode which enable protection to memory and other peripheral device on hardware level(by `Privilege levels` and other mechanisms to restrict memory access). On the other hand, it introduced `virtual memory`, which enable independence of physical space and logic space and raises utilization of memory. While in 80386, Intel expanded offsets to 32 bits(which allow 4G memory space) and introduced  `paging`(which raises utilization of memory more!)
 
-- **Exercise 3**
+**Exercise 3**
 ---
 
 >Q: At what point does the processor start executing 32-bit code? What exactly causes the switch from 16- to 32-bit mode?
@@ -315,7 +315,7 @@ Program Header:
 
 we can see that for boot, the link address is the same with the load address. However, for the kernel, the link address is different with the load address.
 
-- **Exercise 5**
+**Exercise 5**
 ---
 
 >Q: Trace through the first few instructions of the boot loader again and identify the first instruction that would "break" or otherwise do the wrong thing if you were to get the boot loader's link address wrong. Then change the link address in boot/Makefrag to something wrong, run make clean, recompile the lab with make, and trace into the boot loader again to see what happens. Don't forget to change the link address back and make clean again afterward!
@@ -478,7 +478,12 @@ qemu: fatal: Trying to execute code outside RAM or ROM at 0xf010002c
 
 ### Formatted Printing to the Console
 
-- **Exercise 8**
+- **How printf works**
+To understand how `printf` works, we need to understand [How Variable Argument Lists Work in C](http://www.cplusplus.com/reference/cstdarg/va_start/)
+
+
+**Exercise 8**
+---
 
 >Q: We have omitted a small fragment of code - the code necessary to print octal numbers using patterns of the form "%o". Find and fill in this code fragment.
 
@@ -503,9 +508,11 @@ case 'o':
 Be able to answer the following questions:
 
 
-> 1. Explain the interface between printf.c and console.c. Specifically, what function does console.c export? How is this function used by printf.c?
+> Q. Explain the interface between printf.c and console.c. Specifically, what function does console.c export? How is this function used by printf.c?
 
-> 2. Explain the following from console.c:
+console.c exports `cputchar` `getchar` `iscons`, while `cputchar` is used as a parameter when printf.c calls `vprintfmt` in printfmt.c.
+
+> Q. Explain the following from console.c:
 ```c
 1      if (crt_pos >= CRT_SIZE) {
 2              int i;
@@ -516,7 +523,9 @@ Be able to answer the following questions:
 7      }
 ```
 
-> 3. For the following questions you might wish to consult the notes for Lecture 2. These notes cover GCC's calling convention on the x86.
+When the screen is full, scroll down one row to show newer infomation.
+
+> Q. For the following questions you might wish to consult the notes for Lecture 2. These notes cover GCC's calling convention on the x86.
 Trace the execution of the following code step-by-step:
 
 ```c
@@ -526,7 +535,11 @@ cprintf("x %d, y %x, z %d\n", x, y, z);
   - In the call to `cprintf()`, to what does fmt point? To what does ap point?
   - List (in order of execution) each call to cons_putc, va_arg, and vcprintf. For cons_putc, list its argument as well. For va_arg, list what ap points to before and after the call. For vcprintf list the values of its two arguments.
 
-> 4. Run the following code.
+
+In the call to cprintf(), fmt point to the format string of its arguments, ap points to the variable arguments after fmt.
+
+
+> Q. Run the following code.
 
 ```c
     unsigned int i = 0x00646c72;
@@ -534,17 +547,80 @@ cprintf("x %d, y %x, z %d\n", x, y, z);
 ```
 > What is the output? Explain how this output is arrived at in the step-by-step manner of the previous exercise.
 
+The output is `He110 World`, because 57616=0xe110, so the first half of output is He110, i=0x00646c72 is treated as a string, so it will be printed as 'r'=(char)0x72 'l'=(char)0x6c 'd'=(char)0x64, and 0x00 is treated as a mark of end of string.
 
 > The output depends on that fact that the x86 is little-endian. If the x86 were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?
 
+In order to yield the same output in big-endian, we should set i to `0x726c64`, we don't need to change 57616.
 
-> 5. In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+> Q. In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
 
 ```c
     cprintf("x=%d y=%d", 3);
 ```
 
-> 6. Let's say that GCC changed its calling convention so that it pushed arguments on the stack in declaration order, so that the last argument is pushed last. How would you have to change cprintf or its interface so that it would still be possible to pass it a variable number of arguments?
+`x=3 y=SOMETHING_UNKONW`
+y will be the decimal value of the 4 bytes right above where 3 is placed in the stack.
 
+> Q. Let's say that GCC changed its calling convention so that it pushed arguments on the stack in declaration order, so that the last argument is pushed last. How would you have to change cprintf or its interface so that it would still be possible to pass it a variable number of arguments?
+
+Push an integer after the last argument indicating the number of arguments.
+
+
+***Challenge***
+
+>Enhance the console to allow text to be printed in different colors. The traditional way to do this is to make it interpret ANSI escape sequences embedded in the text strings printed to the console, but you may use any mechanism you like. There is plenty of information on the 6.828 reference page and elsewhere on the web on programming the VGA display hardware. If you're feeling really adventurous, you could try switching the VGA hardware into a graphics mode and making the console draw text onto the graphical frame buffer.
+
+![Challenge1](assets/ch1.png)
+
+First I create a globl variable `textcolor` under `inc/textcolor.h`, than in `lib/printfmt.c`
+
+```
+while (1) {
+  while ((ch = * (unsigned char * ) fmt++) != '%') {
+    if (ch == '\0')
++			{
++				textcolor = 0x0700;
+      return;
++			}
+    putch(ch, putdat);
+  }
+
+...
+
+switch ...
+
++		// text color
++		case 'm':
++			num = getint(&ap, lflag);
++			textcolor = num;
++			break;
+
+```
+
+in  `kern/console.c`
+
+```
+cga_putc(int c)
+{
+ // if no attribute given, then use black on white
+-	if (!(c & ~0xFF))
+-		c |= 0x0700;
++	c |= textcolor;
++
++//	if (!(c & ~0xFF))
++//		c |= 0x0700;
+
+ switch (c & 0xff) {
+ case '\b':
+```
+
+in `kern/monitor.c`
+```
+cprintf("Welcome to the JOS kernel monitor!\n");
+cprintf("Type 'help' for a list of commands.\n");
+-
++	cprintf("%m%s\n%m%s\n%m%s\n", 0x0100, "blue", 0x0200, "green", 0x0400, "red");
+```
 
 ### The Stack
