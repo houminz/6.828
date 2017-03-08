@@ -137,54 +137,57 @@ At this time, we are still in the `real mode`, so address translation works acco
 physical address = 16 * segment + offset
 ```
 
-**What BIOS does**
-- sets up an interrupt descriptor table
-- initializes various devices such as the VGA display
-- searches for a bootable device such as a floppy, hard drive, or CD-ROM
-- when it finds a bootable disk, the BIOS reads the `boot loader` from the disk and transfers control to it
+- **What BIOS does**
+  - sets up an interrupt descriptor table
+  - initializes various devices such as the VGA display
+  - searches for a bootable device such as a floppy, hard drive, or CD-ROM
+  - when it finds a bootable disk, the BIOS reads the `boot loader` from the disk and transfers control to it
 
 ## The Boot Loader
 
-So **What is `boot loader`**, according to [wikipedia](https://en.wikipedia.org/wiki/Booting)
+- **What is `boot loader`**
+
+according to [wikipedia](https://en.wikipedia.org/wiki/Booting)
 >A boot loader is a computer program that loads an operating system or some other system software for the computer after completion of the power-on self-tests; it is the loader for the operating system itself. Within the hard reboot process, it runs after completion of the self-tests, then loads and runs the software.
 
 In the conventional hard drive boot mechanism(which we use here), the boot loader(obj/boot/boot) resides in the first sector of our boot device, which we also call `boot sector`. After finishing its work, BIOS loads the 512-byte boot sector into memory at physical addresses 0x7c00 through 0x7dff, then uses a  `jmp` instruction to set the CS:IP to 0000:7c00, passing control to the boot loader.
 
-**Why 0x7c00**      
+- **Why 0x7c00**      
 The magic number 0x7c00 is the result of intresesting history reasons, You can refer to [here](https://www.glamenv-septzen.net/en/view/6) .
 
 Actually the boot loader consists of 2 source: `boot/boot.S` and `boot/main.c`
 
-**What boot loader does**
-- switches the processor from `real mode` to `32-bit protected mode`
-- reads the kernel from the hard disk
-- transfers control to kernel
+- **What boot loader does**
+  - switches the processor from `real mode` to `32-bit protected mode`
+  - reads the kernel from the hard disk
+  - transfers control to kernel
 
-**Why 32-bit Protected Mode**
+- **Why 32-bit Protected Mode**
 
-In `real mode`, memory is limited to only 1MB. Valid address range from 0x00000 to 0xFFFFF, this requires a 20-bit number, which will not fit to any of 8086's 16-bit registers. Intel solved this problem by `segment:offset` pair we talked above. However, real segmented address have disadvantages:
-- A sigle segment can only refer to **64K** of memory(16 bit of offset).
-  When a program has more than 64K of code, the program must be split into sections(called *segments*) and the value of CS must be changed. Similar problem occur with large amounts of data and the DS register. This can be very awkward.
-- Each byte in memory does not have an unique segmented address. The physical address 04808 can be referenced by 047C:0048, 047D:0038, 047E:0028 or 047B:0058. This can complicate the comparison of segmented addresses
+  In `real mode`, memory is limited to only 1MB. Valid address range from 0x00000 to 0xFFFFF, this requires a 20-bit number, which will not fit to any of 8086's 16-bit registers. Intel solved this problem by `segment:offset` pair we talked above. However, real segmented address have disadvantages:
+  - A sigle segment can only refer to **64K** of memory(16 bit of offset).
+    When a program has more than 64K of code, the program must be split into sections(called *segments*) and the value of CS must be changed. Similar problem occur with large amounts of data and the DS register. This can be very awkward.
+  - Each byte in memory does not have an unique segmented address. The physical address 04808 can be referenced by 047C:0048, 047D:0038, 047E:0028 or 047B:0058. This can complicate the comparison of segmented addresses
 
-In 80286, Intel invented `16-bit protected mode`. We still use the `selector:offset` pair to realize address translation. However, the former of the pair is not called `segment` any more, it's now called `selector`. In real mode, the former value of the pair is a paragraph number of physical memory. In protected mode, a selector value is an `index` into a `descriptor table`.  In both modes, programs are divided into segments. In real mode, these segments are at fixed positions in physical memory and the selector value denotes the paragraph number of the beginning of the segment. In protected mode, the segments are not at fixed positions in physical memory. In fact, they do not have to be in memory at all!
+  In 80286, Intel invented `16-bit protected mode`. We still use the `selector:offset` pair to realize address translation. However, the former of the pair is not called `segment` any more, it's now called `selector`. In real mode, the former value of the pair is a paragraph number of physical memory. In protected mode, a selector value is an `index` into a `descriptor table`.  In both modes, programs are divided into segments. In real mode, these segments are at fixed positions in physical memory and the selector value denotes the paragraph number of the beginning of the segment. In protected mode, the segments are not at fixed positions in physical memory. In fact, they do not have to be in memory at all!
 
-Protected mode uses a technique called `virtual memory`. In 16-bit protected mode, segments are moved between memory and disk as needed. All of this is done transparently by the operating system. The program does not have to be written differently for virtual memory to work.
+  Protected mode uses a technique called `virtual memory`. In 16-bit protected mode, segments are moved between memory and disk as needed. All of this is done transparently by the operating system. The program does not have to be written differently for virtual memory to work.
 
-In protected mode, each segment is assigned an entry in a descriptor table. This entry has all the information that the system needs to know about the segment. This information includes: is it currently in memory; if in memory, where is it; access permissions (e.g., read-only). The index of the entry of the segment is the selector value that is stored in segment registers.
+  In protected mode, each segment is assigned an entry in a descriptor table. This entry has all the information that the system needs to know about the segment. This information includes: is it currently in memory; if in memory, where is it; access permissions (e.g., read-only). The index of the entry of the segment is the selector value that is stored in segment registers.
 
-One big disadvantage of 16-bit protected mode is that *offsets are still 16-bit quantities*. As a consequence of this, segment sizes are still limited to at most 64K. This makes the use of large arrays problematic!
+  One big disadvantage of 16-bit protected mode is that *offsets are still 16-bit quantities*. As a consequence of this, segment sizes are still limited to at most 64K. This makes the use of large arrays problematic!
 
-The 80386 introduced 32-bit protected mode. There are two major differences between 386 32-bit and 286 16-bit protected modes:
-- Offsets are expanded to be 32-bits. Thus, segments can have sizes up to 4GB.
-- Segments can be divided into smaller 4K-sized units called `pages`. The virtual memory system works with pages now instead of segments. This means that only parts of segment may be in memory at any one time. In 286 16-bit mode, either the entire segment is in memory or none of it is. This is not practical with the larger segments that 32-bit mode allows.
+  The 80386 introduced 32-bit protected mode. There are two major differences between 386 32-bit and 286 16-bit protected modes:
+  - Offsets are expanded to be 32-bits. Thus, segments can have sizes up to 4GB.
+  - Segments can be divided into smaller 4K-sized units called `pages`. The virtual memory system works with pages now instead of segments. This means that only parts of segment may be in memory at any one time. In 286 16-bit mode, either the entire segment is in memory or none of it is. This is not practical with the larger segments that 32-bit mode allows.
 
-The paragraphs are quoted from sections 1.2.7 and 1.2.8 [PC Assembly Language](https://pdos.csail.mit.edu/6.828/2014/readings/pcasm-book.pdf), Or you may refer to Intel architecture manuals.
+  The paragraphs are quoted from sections 1.2.7 and 1.2.8 [PC Assembly Language](https://pdos.csail.mit.edu/6.828/2014/readings/pcasm-book.pdf), Or you may refer to Intel architecture manuals.
 
-**In a word, why protected mode**       
+- **In a word, why protected mode**       
+
 From 8086 to 80286, Intel introduced protected mode which enable protection to memory and other peripheral device on hardware level(by `Privilege levels` and other mechanisms to restrict memory access). On the other hand, it introduced `virtual memory`, which enable independence of physical space and logic space and raises utilization of memory. While in 80386, Intel expanded offsets to 32 bits(which allow 4G memory space) and introduced  `paging`(which raises utilization of memory more!)
 
-**Exercise 3**
+- **Exercise 3**
 ---
 
 >Q: At what point does the processor start executing 32-bit code? What exactly causes the switch from 16- to 32-bit mode?
@@ -197,14 +200,16 @@ In `boot.S`, the `ljmp $PROT_MODE_CSEG, $protcseg` causes the switch from 16- to
   movl    %eax, %cr0
   ljmp    $PROT_MODE_CSEG, $protcseg
 ```
-**How ljmp works**      
+
+- **How ljmp works**      
 
 To enable 32-bit protected mode, we have to prepare the GDT first(we can use the `lgdt` command), then we enable the `PE` bit on CR0.
 Note that to complete the process of loading a new GDT, the segment registers need to be reloaded. The CS register must be loaded using a far jump(You can refer to [here](https://en.wikibooks.org/wiki/X86_Assembly/Global_Descriptor_Table))
 
 For the `ljmp` instruction, In Real Address Mode or Virtual 8086 mode, the former pointer provides 16 bits for the CS register. In protected mode, the former 16-bit now works as selector. And PROT_MODE_CSEG(0x8) ensure that we still work in the same segment. The offset $protcseg is exactly the next instruction. Till now,we have switch to 32-bit mode, but we still work in the same program logic segment.
 
-**Why PROT_MODE_CSEG should be 0x8, PROT_MODE_DSEG should be 0x10**
+- **Why PROT_MODE_CSEG should be 0x8, PROT_MODE_DSEG should be 0x10**
+
 0x00 points at the null selector.       
 0x08 points at the code selector.       
 0x10 points at the data selector.     
@@ -224,7 +229,7 @@ gdtdesc:
 Actually, null segment, code segment and data segment all start at 0x0, their limit are 0xffffffff(4G).
 
 
-**Question: Before enabling protected mode, we are still at 16-bit real mode, why can we use 32-bit register eax?**
+- **Question: Before enabling protected mode, we are still at 16-bit real mode, why can we use 32-bit register eax?**
 
 
 >Q: What is the last instruction of the boot loader executed
@@ -310,7 +315,7 @@ Program Header:
 
 we can see that for boot, the link address is the same with the load address. However, for the kernel, the link address is different with the load address.
 
-**Exercise 5**
+- **Exercise 5**
 ---
 
 >Q: Trace through the first few instructions of the boot loader again and identify the first instruction that would "break" or otherwise do the wrong thing if you were to get the boot loader's link address wrong. Then change the link address in boot/Makefrag to something wrong, run make clean, recompile the lab with make, and trace into the boot loader again to see what happens. Don't forget to change the link address back and make clean again afterward!
@@ -418,6 +423,128 @@ Because the boot loader loads the kernel to 0x100000
 
 ### Using virtual memory to work around position dependence
 
+- **How Paging Works**
+
+  At lab1, we map the first 4MB of physical memory using hand-written, statically-initialized page directory and page table in `kern/entrypgdir.c`.
+
+  Up until `kern/entry.S` sets the `CR0_PG` flag, memory references are treated as physical addresses. Once CR0_PG is set, memory references are virtual addresses that get translated by the virtual memory hardware to physical addresses. `entry_pgdir` translates
+  - virtual addresses 0xf0000000 through 0xf0400000 to physical addresses 0x00000000 through 0x00400000
+  - virtual addresses 0x00000000 through 0x00400000 to physical addresses 0x00000000 through 0x00400000.
+
+  Any virtual address that is not in one of these two ranges will cause a hardware exception which, since we haven't set up interrupt handling yet, will cause QEMU to dump the machine state and exit.
+
+  Right now, each memory reference must look up to the `entry_pgdir` first. After finding its PTE index, its real physical is known.
+
+
+>Q: Use QEMU and GDB to trace into the JOS kernel and stop at the movl %eax, %cr0. Examine memory at 0x00100000 and at 0xf0100000. Now, single step over that instruction using the stepi GDB command. Again, examine memory at 0x00100000 and at 0xf0100000. Make sure you understand what just happened.
+
+```
+(gdb) x/10i 0x10000c
+=> 0x10000c:	movw   $0x1234,0x472
+   0x100015:	mov    $0x110000,%eax
+   0x10001a:	mov    %eax,%cr3
+   0x10001d:	mov    %cr0,%eax
+   0x100020:	or     $0x80010001,%eax
+   0x100025:	mov    %eax,%cr0
+   0x100028:	mov    $0xf010002f,%eax
+   0x10002d:	jmp    *%eax
+   0x10002f:	mov    $0x0,%ebp
+   0x100034:	mov    $0xf0110000,%esp
+(gdb) stepi 5
+=> 0x100025:	mov    %eax,%cr0
+0x00100025 in ?? ()
+(gdb) x/4bx 0x00100000
+0x100000:	0x02	0xb0	0xad	0x1b
+(gdb) x/4bx 0xf0100000
+0xf0100000 <_start+4026531828>:	0x00	0x00	0x00	0x00
+(gdb) stepi
+=> 0x100028:	mov    $0xf010002f,%eax
+0x00100028 in ?? ()
+(gdb) x/4bx 0x00100000
+0x100000:	0x02	0xb0	0xad	0x1b
+(gdb) x/4bx 0xf0100000
+0xf0100000 <_start+4026531828>:	0x02	0xb0	0xad	0x1b
+```
+
+As we can see, Before `movl %eax, %cr0`, memory at 0x00100000 and at 0xf0100000 is different. After we `stepi`, memory at 0xf0100000 have been mapped to memory at 0x00100000.
+
+> What is the first instruction after the new mapping is established that would fail to work properly if the mapping weren't in place? Comment out the movl %eax, %cr0 in kern/entry.S, trace into it, and see if you were right.
+
+
+`jmp *%eax` would fail because `0xf010002c` is outside of RAM
+```
+qemu: fatal: Trying to execute code outside RAM or ROM at 0xf010002c
+```
+
 ### Formatted Printing to the Console
+
+- **Exercise 8**
+
+>Q: We have omitted a small fragment of code - the code necessary to print octal numbers using patterns of the form "%o". Find and fill in this code fragment.
+
+Replace the original code in  
+```c
+// (unsigned) octal
+case 'o':
+  // Replace this with your code.
+  putch('X', putdat);
+  putch('X', putdat);
+  putch('X', putdat);
+  break;
+```
+with
+```c
+case 'o':
+  num = getuint(&ap, lflag);
+  base = 8;
+  goto number;
+```
+
+Be able to answer the following questions:
+
+
+> 1. Explain the interface between printf.c and console.c. Specifically, what function does console.c export? How is this function used by printf.c?
+
+> 2. Explain the following from console.c:
+```c
+1      if (crt_pos >= CRT_SIZE) {
+2              int i;
+3              memcpy(crt_buf, crt_buf + CRT_COLS, (CRT_SIZE - CRT_COLS) * sizeof(uint16_t));
+4              for (i = CRT_SIZE - CRT_COLS; i < CRT_SIZE; i++)
+5                      crt_buf[i] = 0x0700 | ' ';
+6              crt_pos -= CRT_COLS;
+7      }
+```
+
+> 3. For the following questions you might wish to consult the notes for Lecture 2. These notes cover GCC's calling convention on the x86.
+Trace the execution of the following code step-by-step:
+
+```c
+int x = 1, y = 3, z = 4;
+cprintf("x %d, y %x, z %d\n", x, y, z);
+```
+  - In the call to `cprintf()`, to what does fmt point? To what does ap point?
+  - List (in order of execution) each call to cons_putc, va_arg, and vcprintf. For cons_putc, list its argument as well. For va_arg, list what ap points to before and after the call. For vcprintf list the values of its two arguments.
+
+> 4. Run the following code.
+
+```c
+    unsigned int i = 0x00646c72;
+    cprintf("H%x Wo%s", 57616, &i);
+```
+> What is the output? Explain how this output is arrived at in the step-by-step manner of the previous exercise.
+
+
+> The output depends on that fact that the x86 is little-endian. If the x86 were instead big-endian what would you set i to in order to yield the same output? Would you need to change 57616 to a different value?
+
+
+> 5. In the following code, what is going to be printed after 'y='? (note: the answer is not a specific value.) Why does this happen?
+
+```c
+    cprintf("x=%d y=%d", 3);
+```
+
+> 6. Let's say that GCC changed its calling convention so that it pushed arguments on the stack in declaration order, so that the last argument is pushed last. How would you have to change cprintf or its interface so that it would still be possible to pass it a variable number of arguments?
+
 
 ### The Stack
