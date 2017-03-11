@@ -11,7 +11,7 @@
 
 The operating system must keep track of which parts of physical RAM are free and which are currently in use. Considering what we have done now:
 
-![roadmap](assets/roadmap.svg)
+![roadmap](assets/roadmap.png)
 
 After the boot loader loading the kernel to physical address 0x00100000(1M, Extended Memory), the kernel began to take control. First of all, the kernel enable paging to use virtual memory and work around position dependence. During this period, we just do this using the hand-written, statically-initialized page directory and page table in `kern/entrypgdir.c`. Up to now we just map the first 4M of physical memory.
 - virtual addresses 0xf0000000 through 0xf0400000 to physical addresses 0x00000000 through 0x00400000
@@ -243,6 +243,7 @@ test flags
 page2kva(pp0) is f03fd000
 check_page_alloc() succeeded!
 ```
+
 ## Part 2: Virtual Memory
 
 ### Virtual, Liner, and Physical Address
