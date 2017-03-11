@@ -11,7 +11,7 @@
 
 The operating system must keep track of which parts of physical RAM are free and which are currently in use. Considering what we have done now:
 
-![roadmap](assets/roadmap.png)
+![roadmap](assets/roadmap.svg)
 
 After the boot loader loading the kernel to physical address 0x00100000(1M, Extended Memory), the kernel began to take control. First of all, the kernel enable paging to use virtual memory and work around position dependence. During this period, we just do this using the hand-written, statically-initialized page directory and page table in `kern/entrypgdir.c`. Up to now we just map the first 4M of physical memory.
 - virtual addresses 0xf0000000 through 0xf0400000 to physical addresses 0x00000000 through 0x00400000
@@ -178,7 +178,7 @@ for(; i < npages; i++)
 
 Then, we entered `check_page_free_list`，Check that the pages on the page_free_list are reasonable.
 **Here is the code I don't quiet understand**
-```
+```c
 if (only_low_memory) {
   // Move pages with lower addresses first in the free
   // list, since entry_pgdir does not map all pages.
@@ -199,7 +199,7 @@ if (only_low_memory) {
 As we can see, the code here is to move pages with lower address first in free list. This is because the free page list originally begins from the big-number pages. However, jos now use entry_pgdir, and have not mapped for the big-number pages. So we can only operate on small-number pages. For this reason, we need to move pages before 4M first in the free page list.
 
 Finally, we entered `check_page_alloc`, this function checks `page_alloc` and `page_free`
-```
+```c
 struct PageInfo *
 page_alloc(int alloc_flags)
 {
