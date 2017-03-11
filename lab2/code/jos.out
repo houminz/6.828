@@ -1,0 +1,25 @@
+*** Now run 'make gdb'.
+***
+WARNING: Image format was not specified for 'obj/kern/kernel.img' and probing guessed raw.
+         Automatically detecting the format is dangerous for raw images, write operations on block 0 will be restricted.
+         Specify the 'raw' format explicitly to remove the restrictions.
+6828 decimal is 15254 octal!
+Physical memory: 66556K available, base = 640K, extended = 65532K
+npages is 16639, sizeof(struct PageInfo) is 8
+we now enter page_init! and page_free_list is 0 now
+we now enter check_page_free_list, pdx_limit is 1, NPDENTRIES is 1024
+before hanling low memory question, page_free_list is f01367f0 now
+after hanling low memory question, page_free_list is f0117ff8 now
+first_free_page is f0137000
+nfree_basemem is 159, nfree_extmem is 16072
+should be able to allocate three pages
+test flags
+page2kva(pp0) is f03fd000
+check_page_alloc() succeeded!
+kernel panic at kern/pmap.c:760: assertion failed: page_insert(kern_pgdir, pp1, 0x0, PTE_W) < 0
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+blue
+green
+red
+qemu: terminating on signal 15 from pid 30217
