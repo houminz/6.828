@@ -178,7 +178,7 @@ for(; i < npages; i++)
 
 Then, we entered `check_page_free_list`，Check that the pages on the page_free_list are reasonable.
 **Here is the code I don't quiet understand**
-```
+```c
 if (only_low_memory) {
   // Move pages with lower addresses first in the free
   // list, since entry_pgdir does not map all pages.
@@ -199,7 +199,7 @@ if (only_low_memory) {
 As we can see, the code here is to move pages with lower address first in free list. This is because the free page list originally begins from the big-number pages. However, jos now use entry_pgdir, and have not mapped for the big-number pages. So we can only operate on small-number pages. For this reason, we need to move pages before 4M first in the free page list.
 
 Finally, we entered `check_page_alloc`, this function checks `page_alloc` and `page_free`
-```
+```c
 struct PageInfo *
 page_alloc(int alloc_flags)
 {
@@ -291,7 +291,7 @@ In general, `pp_ref` should equal to the number of times the physical page appea
 Here we need to Implement the following functions
 
 - pgdir_walk()
->
+```
 // Given 'pgdir', a pointer to a page directory, pgdir_walk returns
 // a pointer to the page table entry (PTE) for linear address 'va'.
 // This requires walking the two-level page table structure.
@@ -303,10 +303,10 @@ Here we need to Implement the following functions
 //    - Otherwise, the new page's reference count is incremented,
 //	the page is cleared,
 //	and pgdir_walk returns a pointer into the new page table page.
-
+```
 First we need to know that the 31-12bit of page directory and page table is physical address, not virtual address. To get page table entry, we need `KADDR` to map it to virtual address.
 
-```
+```c
 pte_t *
 pgdir_walk(pde_t *pgdir, const void *va, int create)
 {
@@ -339,7 +339,7 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 ```
 
 - page_lookup()
->
+```c
 //
 // Return the page mapped at virtual address 'va'.
 // If pte_store is not zero, then we store in it the address
@@ -348,8 +348,6 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 // but should not be used by most callers.
 //
 // Return NULL if there is no page mapped at va.
-
-```
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
@@ -368,7 +366,7 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 
 - boot_map_region
 
-```
+```c
 //
 // Map [va, va+size) of virtual address space to physical [pa, pa+size)
 // in the page table rooted at pgdir.  Size is a multiple of PGSIZE, and
@@ -393,7 +391,8 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 ```
 
 - page_lookup
->
+
+```c
 //
 // Return the page mapped at virtual address 'va'.
 // If pte_store is not zero, then we store in it the address
@@ -406,7 +405,6 @@ boot_map_region(pde_t *pgdir, uintptr_t va, size_t size, physaddr_t pa, int perm
 // Hint: the TA solution uses pgdir_walk and pa2page.
 //
 
-```
 struct PageInfo *
 page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 {
@@ -424,7 +422,7 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 ```
 
 - page_remove
->
+```c
 //
 // Unmaps the physical page at virtual address 'va'.
 // If there is no physical page at that address, silently does nothing.
@@ -440,7 +438,6 @@ page_lookup(pde_t *pgdir, void *va, pte_t **pte_store)
 // Hint: The TA solution is implemented using page_lookup,
 // 	tlb_invalidate, and page_decref.
 //
-```
 void
 page_remove(pde_t *pgdir, void *va)
 {
@@ -456,7 +453,7 @@ page_remove(pde_t *pgdir, void *va)
 ```
 
 - page_insert
->
+```c
 //
 // Map the physical page 'pp' at virtual address 'va'.
 // The permissions (the low 12 bits) of the page table entry
@@ -480,7 +477,6 @@ page_remove(pde_t *pgdir, void *va)
 //   -E_NO_MEM, if page table couldn't be allocated
 //
 
-```
 int
 page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
 {
@@ -531,13 +527,12 @@ Now you'll set up the address space above UTOP: the kernel part of the address s
 Your code should now pass the check_kern_pgdir() and check_page_installed_pgdir() checks.
 
 - Map 'pages' read-only by the user at linear address UPAGES
->
+
+```c
 // Permissions:
 //    - the new image at UPAGES -- kernel R, user R
 //      (ie. perm = PTE_U | PTE_P)
 //    - pages itself -- kernel RW, user NONE
-
-```c
 boot_map_region(kern_pgdir, UPAGES, PTSIZE, PADDR(pages), PTE_U);
 ```
 
