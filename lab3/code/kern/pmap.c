@@ -10,6 +10,8 @@
 #include <kern/kclock.h>
 #include <kern/env.h>
 
+#include <kern/trap.h>
+
 // These variables are set by i386_detect_memory()
 size_t npages;			// Amount of physical memory (in pages)
 static size_t npages_basemem;	// Amount of base memory (in pages)
@@ -405,7 +407,7 @@ pgdir_walk(pde_t *pgdir, const void *va, int create)
 		else
 		{
 			pp->pp_ref++;
-			pgdir[PDX(va)] = page2pa(pp) | PTE_P | PTE_W;
+			pgdir[PDX(va)] = page2pa(pp) | PTE_P | PTE_W | PTE_U;
 			pte_t * pg_table_p = KADDR(page2pa(pp));
 			result = pg_table_p + PTX(va);
 			return result;
@@ -565,7 +567,15 @@ int
 user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 {
 	// LAB 3: Your code here.
-
+	uint32_t start = (uint32_t)ROUNDDOWN((char *)va, PGSIZE);
+	uint32_t end = (uint32_t)ROUNDUP((char *)va+len, PGSIZE);
+	for(; start < end; start += PGSIZE) {
+		pte_t *pte = pgdir_walk(env->env_pgdir, (void*)start, 0);
+		if((start >= ULIM) || (pte == NULL) || !(*pte & PTE_P) || ((*pte & perm) != perm)) {
+			user_mem_check_addr = (start < (uint32_t)va ? (uint32_t)va : start);
+			return -E_FAULT;
+		}
+	}
 	return 0;
 }
 
@@ -580,6 +590,7 @@ void
 user_mem_assert(struct Env *env, const void *va, size_t len, int perm)
 {
 	if (user_mem_check(env, va, len, perm | PTE_U) < 0) {
+		print_trapframe(&(env->env_tf));
 		cprintf("[%08x] user_mem_check assertion failure for "
 			"va %08x\n", env->env_id, user_mem_check_addr);
 		env_destroy(env);	// may not return

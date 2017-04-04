@@ -107,14 +107,14 @@ As we know, the the struct `Env` keeps all the state of an enviroment. The first
 
 The first instruction `movl %0,%%esp` is let esp point to trapframe. Then `popal`
 > popal: pop from the stack into general-purpose register
-EDI ← Pop();
-ESI ← Pop();
-EBP ← Pop();
-Increment ESP by 4; (* Skip next 4 bytes of stack *)
-EBX ← Pop();
-EDX ← Pop();
-ECX ← Pop();
-EAX ← Pop();
+EDI ← Pop();        
+ESI ← Pop();            
+EBP ← Pop();            
+Increment ESP by 4; (* Skip next 4 bytes of stack *)            
+EBX ← Pop();                
+EDX ← Pop();                
+ECX ← Pop();                
+EAX ← Pop();                
 
 Next we popl %es and ds, and then skip  `tr_trapno` and `tr_err`. The last instruction is `iret`
 
@@ -804,17 +804,260 @@ SETGATE(idt[i], 0, GD_KT, vectors[i], 3);
 But this will let user intefere with memory management which is not what we want.
 
 
-
 ## Part B: Page Faults, Breakpoints Exceptions, and System Calls
-
-
 
 ### Handling Page Faults
 
+When the processor takes a page fault, it stores the linear (i.e., virtual) address that caused the fault in a special processor control register, `CR2`. In `trap.c` we have provided the beginnings of a special function, `page_fault_handler()`, to handle page fault exceptions.
+
+**Exercise 5**
+
+> Modify `trap_dispatch()` to dispatch page fault exceptions to `page_fault_handler()`.
+
+Considering what we have done now, we push the trap frame to the stack, and call `trap()`. In  trap we dispath based on what type of trap occurred.
+```
+// Dispatch based on what type of trap occurred
+trap_dispatch(tf);
+```
+Here is the code of `trap_dispatch()`
+```
+switch (tf->tf_trapno) {
+	case T_PGFLT:
+		page_fault_handler(tf);
+		return;
+	default:
+		break;
+}
+```
+After this, we get 50/80.
+
 ### The Breakpoint Exception
+
+The breakpoint exception, interrupt vector 3 (`T_BRKPT`), is normally used to allow debuggers to insert breakpoints in a program's code by temporarily replacing the relevant program instruction with the special 1-byte `int3` software interrupt instruction.
+
+**Exercise 6**
+> Modify `trap_dispatch()` to make breakpoint exceptions invoke the kernel monitor.
+
+Like above, we chaged trap_dispatch
+```
+switch (tf->tf_trapno) {
+	case T_BRKPT:
+		monitor(tf);
+		return;
+	case T_PGFLT:
+		page_fault_handler(tf);
+		return;
+	default:
+		break;
+}
+```
+But this will produce a `General Protection` fault. This is becasuse we set DPL of `T_BRKPT` to 0 and we use `int $3` in `breakpoint`. To let the user to use break point, we need to modify `trap_init`
+```
+for(int i = 0; i <= T_SYSCALL; i++)
+{
+	switch (i) {
+		case T_BRKPT:
+		case T_SYSCALL:
+			SETGATE(idt[i], 0, GD_KT, vectors[i], 3);
+			break;
+		default:
+			SETGATE(idt[i], 0, GD_KT, vectors[i], 0);
+	}
+}
+```
+
+After this, we get 55/80
+
+**Question**
+
+> The break point test case will either generate a break point exception or a general protection fault depending on how you initialized the break point entry in the IDT
+
+As I have said above.
 
 ### System Calls
 
+The application will pass the system call number and the system call arguments in registers. This way, the kernel won't need to grub around in the user environment's stack or instruction stream. The system call number will go in %eax, and the arguments (up to five of them) will go in %edx, %ecx, %ebx, %edi, and %esi, respectively. The kernel passes the return value back in %eax.
+
+**Exercise 7**
+
+> Add a handler in the kernel for interrupt vector T_SYSCALL.
+
+```
+int32_t
+syscall(uint32_t syscallno, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t a4, uint32_t a5)
+{
+	switch (syscallno) {
+		case SYS_cputs:
+			sys_cputs((char *)a1, a2);
+			return 0;
+		case SYS_cgetc:
+			return sys_cgetc();
+		case SYS_getenvid:
+			return sys_getenvid();
+		case SYS_env_destroy:
+			return sys_env_destroy(a1);
+		default:
+			return -E_INVAL;
+	}
+}
+```
+And we need to Check that the user has permission to read memory in `sys_cputs` by call `user_mem_assert`
+
+```
+static void
+sys_cputs(const char *s, size_t len)
+{
+	// Check that the user has permission to read memory [s, s+len).
+	// Destroy the environment if not.
+
+	// LAB 3: Your code here.
+	if(curenv->env_tf.tf_cs & 3)
+		user_mem_assert(curenv, s, len, 0);
+	// Print the string supplied by the user.
+	cprintf("%.*s", len, s);
+}
+```
+
+Notice that we the user use system call, they are using function from `lib/syscall.c`  and call `int $(T_SYSCALL)`
+
+Finally, we also need to change `trap_dispatch`. It's tricky to use register value as function paraments.
+
+```
+case T_SYSCALL:
+	syscall(tf->tf_regs.reg_eax, tf->tf_regs.reg_edx, tf->tf_regs.reg_ecx,
+			tf->tf_regs.reg_ebx, tf->tf_regs.reg_edi, tf->tf_regs.reg_esi);
+	return;
+```
+
+Right now, we can see `hello, world` printed by the user program!
+
+> **Why we can't do this before ?**
+
+
 ### User-mode Startup
 
+**Exercise 8**
+
+Add these lines to libmain.c to initialize `thisenv` properly.
+```
+	envid_t id = sys_getenvid();
+	thisenv = &envs[ENVX(id)];
+```
+
+But it faults, How can? I checked pmap.c and I am sure that I have mapped the UENVS area user-readable.
+```
+	boot_map_region(kern_pgdir, UENVS, PTSIZE, PADDR(envs), PTE_U);
+```
+
+**BIG BUG !!!**
+
+when I trace back into `boot_map_region`, I
+```
+pte_t *
+pgdir_walk(pde_t *pgdir, const void *va, int create)
+{
+	// Fill this function in
+	pde_t pde = pgdir[PDX(va)];
+	pte_t * result;
+	if(pde & PTE_P)
+	{
+		pte_t * pg_table_p = KADDR(PTE_ADDR(pde));
+		result = pg_table_p + PTX(va);
+		return result;
+	}
+	else if(!create)
+		return NULL;
+	else
+	{
+		struct PageInfo *pp = page_alloc(1);
+		if(!pp)
+			return NULL;
+		else
+		{
+			pp->pp_ref++;
+			pgdir[PDX(va)] = page2pa(pp) | PTE_P | PTE_W;
+			pte_t * pg_table_p = KADDR(page2pa(pp));
+			result = pg_table_p + PTX(va);
+			return result;
+		}
+	}
+}
+```
+
+Because the PDE is not `PTE_U`, So when I want to access the page, although the page is `PTE_U`, the page directory page is not. Thus we cannot access the page!
+
+fix the line
+```
+			pgdir[PDX(va)] = page2pa(pp) | PTE_P | PTE_W | PTE_U;
+```
+
 ### Page Faults and Memory Protection
+
+When a program passes the kernel a pointer, the kernel will check that the address is in the user part of the address space, and that the page table would allow the memory operation.
+
+Thus, the kernel will never suffer a page fault due to dereferencing a user-supplied pointer. If the kernel does page fault, it should panic and terminate.
+
+**Exercise 9**
+
+>  Change kern/trap.c to panic if a page fault happens in kernel mode.
+
+To determine whether a fault happened in user mode or in kernel mode, check the low bits of the tf_cs.
+
+```
+	if ((tf->tf_cs & 3) == 0)
+		panic("Page fault in kernel mode\n");
+```
+
+> Read `user_mem_assert` in kern/pmap.c and implement `user_mem_check` in that same file.
+
+```
+int
+user_mem_check(struct Env *env, const void *va, size_t len, int perm)
+{
+	// LAB 3: Your code here.
+	uint32_t start = (uint32_t)ROUNDDOWN((char *)va, PGSIZE);
+	uint32_t end = (uint32_t)ROUNDUP((char *)va+len, PGSIZE);
+	for(; start < end; start += PGSIZE) {
+		pte_t *pte = pgdir_walk(env->env_pgdir, (void*)start, 0);
+		if((start >= ULIM) || (pte == NULL) || !(*pte & PTE_P) || ((*pte & perm) != perm)) {
+			user_mem_check_addr = (start < (uint32_t)va ? (uint32_t)va : start);
+			return -E_FAULT;
+		}
+	}
+	return 0;
+}
+```
+
+> Finally, change `debuginfo_eip` in kern/kdebug.c to call `user_mem_check` on usd, stabs, and stabstr.
+
+```
+	if (user_mem_check(curenv, usd, sizeof(struct UserStabData), PTE_U))
+		return -1;
+
+	...
+
+	if (user_mem_check(curenv, stabs, sizeof(struct Stab), PTE_U))
+		return -1;
+
+	if (user_mem_check(curenv, stabstr, stabstr_end-stabstr, PTE_U))
+		return -1;
+```
+
+When I call `backtrace` I get a PAGE FAULT, it is easy to see that the PF is caused by accessing memory 0xeebfe000, which is beyond the user stack:
+
+```
+K> backtrace
+Stack backtrace:
+ebp efffff20 eip f01008df args 00000001 efffff38 f01a0000 00000000 f017da40
+	     kern/monitor.c:147: monitor+276
+ebp efffff90 eip f01034ff args f01a0000 efffffbc 00000000 00000082 00000000
+	     kern/trap.c:161: trap+153
+ebp efffffb0 eip f0103733 args efffffbc 00000000 00000000 eebfdfd0 efffffdc
+	     kern/syscall.c:69: syscall+0
+ebp eebfdfd0 eip 00800073 args 00000000 00000000 eebfdff0 00800049 00000000
+	     lib/libmain.c:28: libmain+58
+ebp eebfdff0 eip 00800031 args 00000000 00000000Incoming TRAP frame at 0xeffffea4
+kernel panic at kern/trap.c:240: Page fault in kernel mode
+```
+
+## This completes the lab.
