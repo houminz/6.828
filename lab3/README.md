@@ -78,6 +78,31 @@ env_pop_tf(struct Trapframe *tf)
 The `env_pop_tf` function restores the register values in the Trapframe with the `iret` instruction. This exits the kernel and starts executing some enviroment's code.
 
 **How it works?**
+
+Here is the trapframe structure.
+
+```
+CPU->TSS_ESP0--->    +--------------------+              
+                     |         SS         |   \ Only Present On
+                     |         ESP        |   / Privilege Change
+                     |       EFLAGS       |     
+                     |         CS         |     
+                     |         EIP        |     
+                     |     error code     |
+                     |       trapno       |
+                     |         DS         |
+                     |         ES         |
+                     |         EAX        |
+                     |         ECX        |
+                     |         EDX        |
+                     |         EBX        |
+                     |         OESP       |
+                     |         EBP        |
+                     |         ESI        |
+                     |         EDI        |
+                     +--------------------+     tf <------- ESP        
+```
+
 As we know, the the struct `Env` keeps all the state of an enviroment. The first part of `Env` is all about the related registers of an enviroment. When we want to run an enviroment, we let `esp` point to the start of  `Env`, and then we pop the registers value to the corresponding register.
 
 The first instruction `movl %0,%%esp` is let esp point to trapframe. Then `popal`
@@ -453,7 +478,7 @@ And this is where we use system call interrupt. we can find `int    $0x30` in `s
 
 check Makefile under user directory `user/Makefrag`
 ```
-$(OBJDIR)/user/%: $(OBJDIR)/user/%.o $(OBJDIR)/lib/entry.o $(USERLIBS:%=$(OBJDIR)/lib/lib%.a) user/user.ld
+$(OBJDIR)/user/%: $(OBJDIR)/user/%.o $(OBJDIR)/lib /entry.o $(USERLIBS:%=$(OBJDIR)/lib/lib%.a) user/user.ld
 	@echo + ld $@
 	$(V)$(LD) -o $@ $(ULDFLAGS) $(LDFLAGS) -nostdlib $(OBJDIR)/lib/entry.o $@.o -L$(OBJDIR)/lib $(USERLIBS:%=-l%) $(GCC_LIB)
 ```
@@ -553,6 +578,131 @@ The overall flow of control that you should achieve is depicted below:
 |                |             // ...
 +----------------+
 ```
+
+**Exercise 4**
+> Edit `trapentry.S` and `trap.c` and implement the features described above.
+
+First we need to modify `trap_init()` to initialize the `idt` to point to each of entry points.
+
+Here is the interrupt table for reference
+
+![interrupt table](assets/interrupt-table.png)
+
+```c
+void
+trap_init(void)
+{
+	extern struct Segdesc gdt[];
+
+	// LAB 3: Your code here.
+	//SETGATE(gate, istrap, sel, off, dpl)
+	void DIVIDE();
+	SETGATE(idt[0], 0, GD_KT, DIVIDE, 0);
+	void DEBUG();
+	SETGATE(idt[1], 0, GD_KT, DEBUG, 0);
+	void NMI();
+	SETGATE(idt[2], 0, GD_KT, NMI, 0);
+	void BRKPT();
+	SETGATE(idt[3], 1, GD_KT, BRKPT, 0);
+	void OFLOW();
+	SETGATE(idt[4], 1, GD_KT, OFLOW, 0);
+	void BOUND();
+	SETGATE(idt[5], 0, GD_KT, BOUND, 0);
+	void ILLOP();
+	SETGATE(idt[6], 0, GD_KT, ILLOP, 0);
+	void DEVICE();
+	SETGATE(idt[7], 0, GD_KT, DEVICE, 0);
+	void DBLFLT();
+	SETGATE(idt[8], 0, GD_KT, DBLFLT, 0);
+	void TSS();
+	SETGATE(idt[10], 0, GD_KT, TSS, 0);
+	void SEGNP();
+	SETGATE(idt[11], 0, GD_KT, SEGNP, 0);
+	void STACK();
+	SETGATE(idt[12], 0, GD_KT, STACK, 0);
+	void GPFLT();
+	SETGATE(idt[13], 0, GD_KT, GPFLT, 0);
+	void PGFLT();
+	SETGATE(idt[14], 0, GD_KT, PGFLT, 0);
+	void FPERR();
+	SETGATE(idt[16], 0, GD_KT, FPERR, 0);
+	void ALIGN();
+	SETGATE(idt[17], 0, GD_KT, ALIGN, 0);
+	void MCHK();
+	SETGATE(idt[18], 0, GD_KT, MCHK, 0);
+	void SIMDERR();
+	SETGATE(idt[19], 0, GD_KT, SIMDERR, 0);
+
+	// Per-CPU setup
+	trap_init_percpu();
+}
+```
+
+When the interrupt happens, the processor switches to the kenerl stack and pushs old SS, ESP, EFLAGS, CS and EIP. Then it sets CS:EIP to point to the handler function described by the entry. The handler function takes control and handle the exception.
+
+> **How  can we set entry points for different traps?**
+
+We have `TRAPHANDLER` and `TRAPHANDLER_NOEC` in `trapentry.S`,  they push the *error code* and *trapno* into the stack. Then call `_alltraps`
+
+```
+_alltraps:
+    pushl %ds;
+    pushl %es;
+    pushal;
+    pushl $GD_KD;
+    popl %ds;
+    pushl $GD_KD;
+    popl %es;
+    pushl %esp;
+    call trap;
+```
+
+- push values to make the stack look like a struct Trapframe
+- load GD_KD into %ds and %es
+- pushl %esp to pass a pointer to the Trapframe as an argument to trap()
+- call trap
+
+> But we still haven't generated entry points for the different traps.
+
+Here is the code.
+
+```
+    TRAPHANDLER_NOEC(DIVIDE, T_DIVIDE)
+    TRAPHANDLER_NOEC(DEBUG, T_DEBUG)
+    TRAPHANDLER_NOEC(NMI, T_NMI)
+    TRAPHANDLER_NOEC(BRKPT, T_BRKPT)
+    TRAPHANDLER_NOEC(OFLOW, T_OFLOW)
+    TRAPHANDLER_NOEC(BOUND, T_BOUND)
+    TRAPHANDLER_NOEC(ILLOP, T_ILLOP)
+    TRAPHANDLER_NOEC(DEVICE, T_DEVICE)
+    TRAPHANDLER(DBLFLT, T_DBLFLT)
+    TRAPHANDLER(TSS, T_TSS)
+    TRAPHANDLER(SEGNP, T_SEGNP)
+    TRAPHANDLER(STACK, T_STACK)
+    TRAPHANDLER(GPFLT, T_GPFLT)
+    TRAPHANDLER(PGFLT, T_PGFLT)
+    TRAPHANDLER_NOEC(FPERR, T_FPERR)
+    TRAPHANDLER(ALIGN, T_ALIGN)
+    TRAPHANDLER_NOEC(MCHK, T_MCHK)
+    TRAPHANDLER_NOEC(SIMDERR, T_SIMDERR)
+```
+By the macro `TRAPHANDLER` and `TRAPHANDLER_NOEC` we actually declare code like this:
+```
+DIVIDE:						
+	pushl $0;			
+	pushl $(num);				
+	jmp _alltraps
+```
+Type `make grade`
+```
+divzero: OK (2.7s)
+softint: OK (1.1s)
+badsegment: OK (0.9s)
+Part A score: 30/30
+```
+
+***Challenge***
+> You probably have a lot of very similar code right now, between the lists of TRAPHANDLER in trapentry.S and their installations in trap.c. Clean this up. Change the macros in trapentry.S to automatically generate a table for trap.c to use. Note that you can switch between laying down code and data in the assembler by using the directives .text and .data.
 
 
 ## Part B: Page Faults, Breakpoints Exceptions, and System Calls
