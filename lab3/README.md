@@ -704,8 +704,110 @@ Part A score: 30/30
 ***Challenge***
 > You probably have a lot of very similar code right now, between the lists of TRAPHANDLER in trapentry.S and their installations in trap.c. Clean this up. Change the macros in trapentry.S to automatically generate a table for trap.c to use. Note that you can switch between laying down code and data in the assembler by using the directives .text and .data.
 
+Here is the code in `trap_init` learnt from `xv6`
+```
+extern uint32_t vectors[];
+for(int i = 0; i < T_SYSCALL; i++)
+	SETGATE(idt[i], 0, GD_KT, vectors[i], 0);
+SETGATE(idt[T_SYSCALL], 1, GD_KT, vectors[T_SYSCALL], 3);
+```
+we define a function array in  `trapentry.S`.
+```
+.data
+    .globl  vectors
+vectors:
+```
+By using the directives `.text` and `.data`, we can switch between laying down code and data in the assembler. In the macro `TRAPHANDLER`， we use a trick like this. And use `if` to do different thing for ec or norc.
+```
+#define TRAPHANDLER(name, num)						\
+    .data;  \
+        .long name; \
+    .text;  \
+        .globl name;		/* define global symbol for 'name' */	\
+    	.type name, @function;	/* symbol type is function */		\
+    	.align 2;		/* align function definition */		\
+	name:			/* function starts here */		\
+        .if !(num == 8 || num == 17 || (num >= 10 && num <= 14));   \
+        pushl $0;   \
+        .endif;     \
+    	pushl $(num);							\
+    	jmp _alltraps
+```
+Finally we can use the macro now
+```
+    TRAPHANDLER(vector0, 0)
+    TRAPHANDLER(vector1, 1)
+    TRAPHANDLER(vector2, 2)
+    TRAPHANDLER(vector3, 3)
+    TRAPHANDLER(vector4, 4)
+    TRAPHANDLER(vector5, 5)
+    TRAPHANDLER(vector6, 6)
+    TRAPHANDLER(vector7, 7)
+    TRAPHANDLER(vector8, 8)
+    TRAPHANDLER(vector9, 9)
+    TRAPHANDLER(vector10, 10)
+    TRAPHANDLER(vector11, 11)
+    TRAPHANDLER(vector12, 12)
+    TRAPHANDLER(vector13, 13)
+    TRAPHANDLER(vector14, 14)
+    TRAPHANDLER(vector15, 15)
+    TRAPHANDLER(vector16, 16)
+    TRAPHANDLER(vector17, 17)
+    TRAPHANDLER(vector18, 18)
+    TRAPHANDLER(vector19, 19)
+    TRAPHANDLER(vector20, 20)
+    TRAPHANDLER(vector21, 21)
+    TRAPHANDLER(vector22, 22)
+    TRAPHANDLER(vector23, 23)
+    TRAPHANDLER(vector24, 24)
+    TRAPHANDLER(vector25, 25)
+    TRAPHANDLER(vector26, 26)
+    TRAPHANDLER(vector27, 27)
+    TRAPHANDLER(vector28, 28)
+    TRAPHANDLER(vector29, 29)
+    TRAPHANDLER(vector30, 30)
+    TRAPHANDLER(vector31, 31)
+    TRAPHANDLER(vector32, 32)
+    TRAPHANDLER(vector33, 33)
+    TRAPHANDLER(vector34, 34)
+    TRAPHANDLER(vector35, 35)
+    TRAPHANDLER(vector36, 36)
+    TRAPHANDLER(vector37, 37)
+    TRAPHANDLER(vector38, 38)
+    TRAPHANDLER(vector39, 39)
+    TRAPHANDLER(vector40, 40)
+    TRAPHANDLER(vector41, 41)
+    TRAPHANDLER(vector42, 42)
+    TRAPHANDLER(vector43, 43)
+    TRAPHANDLER(vector44, 44)
+    TRAPHANDLER(vector45, 45)
+    TRAPHANDLER(vector46, 46)
+    TRAPHANDLER(vector47, 47)
+    TRAPHANDLER(vector48, 48)
+```
+
+**Question**
+> What is the purpose of having an individual handler function for each exception/interrupt?
+
+Because different exception/interrupt have different way to deal with. If not We can't easily provide protection then.
+
+> Did you have to do anything to make the user/softint program behave correctly? The grade script expects it to produce a general protection fault (trap 13), but softint's code says int $14. Why should this produce interrupt vector 13?
+
+Because the current system(user/softint) is running on user mode, DPL is 3. But INT instruction is system instruction, its privilege is 0. The user cannot invoke `int $14`, thus leading to General Protection(trap 13)
+
+>  What happens if the kernel actually allows softint's int $14 instruction to invoke the kernel's page fault handler (which is interrupt vector 14)?
+
+We should set the DPL to 3 to allow users invoke `int $14`
+```
+SETGATE(idt[i], 0, GD_KT, vectors[i], 3);
+```
+But this will let user intefere with memory management which is not what we want.
+
+
 
 ## Part B: Page Faults, Breakpoints Exceptions, and System Calls
+
+
 
 ### Handling Page Faults
 
