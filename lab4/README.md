@@ -30,6 +30,10 @@ mmio_map_region(physaddr_t pa, size_t size)
 }
 ```
 
+**Question: How LAPIC works ?**
+---
+ 
+
 #### Application Processor Bootstrap
 ---
 
@@ -132,7 +136,7 @@ SMP: CPU 3 starting
 **Question**
 ---
 
-> It seems that using the big kernel lock guarantees that only one CPU can run the kernel code at a time. Why do we still need separate kernel stacks for each CPU?
+> It seems that using the big kernel lock guarantees that only one CPU can run the kernel code at a time. Why do we still need separate kernel stacks for each CPU? 
 
 When an interrupt occurs, the hardware automatically pushes
 - uint32_t tf_err
@@ -146,9 +150,302 @@ to kernel stack before checking the lock. So it will just mess up.
 ### Round-Robin Scheduling
 
 
+**Exercise 6**
+> Implement round-robin scheduling in sched_yield() as described above
+
+Note that curenv may not always valid.
+```c
+void
+sched_yield(void)
+{
+	struct Env *idle;
+	int i, index = 0;
+	if (curenv)
+		index = ENVX(curenv->env_id);
+	else
+		index = 0;
+
+	for(i = index; i != index + NENV ; i++) {
+		if (envs[i%NENV].env_status == ENV_RUNNABLE)
+			env_run(&envs[i%NENV]);
+	}
+	if(curenv && curenv->env_status == ENV_RUNNING) {
+		env_run(curenv);
+	}
+
+	// sched_halt never returns
+	sched_halt();
+}
+```
+Run `make qemu`
+```
+SMP: CPU 0 found 1 CPU(s)
+enabled interrupts: 1 2
+[00000000] new env 00001000
+[00000000] new env 00001001
+[00000000] new env 00001002
+Hello, I am environment 00001000.
+Hello, I am environment 00001001.
+Hello, I am environment 00001002.
+Back in environment 00001000, iteration 0.
+Back in environment 00001001, iteration 0.
+Back in environment 00001002, iteration 0.
+Back in environment 00001000, iteration 1.
+Back in environment 00001001, iteration 1.
+Back in environment 00001002, iteration 1.
+Back in environment 00001000, iteration 2.
+Back in environment 00001001, iteration 2.
+Back in environment 00001002, iteration 2.
+Back in environment 00001000, iteration 3.
+Back in environment 00001001, iteration 3.
+Back in environment 00001002, iteration 3.
+Back in environment 00001000, iteration 4.
+All done in environment 00001000.
+[00001000] exiting gracefully
+[00001000] free env 00001000
+Back in environment 00001001, iteration 4.
+All done in environment 00001001.
+[00001001] exiting gracefully
+[00001001] free env 00001001
+Back in environment 00001002, iteration 4.
+All done in environment 00001002.
+[00001002] exiting gracefully
+[00001002] free env 00001002
+No runnable environments in the system!
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+K> 
+```
+
+Run `make qemu CPUS=2`
+```
+SMP: CPU 0 found 2 CPU(s)
+enabled interrupts: 1 2
+SMP: CPU 1 starting
+[00000000] new env 00001000
+[00000000] new env 00001001
+[00000000] new env 00001002
+Hello, I am environment 00001000.
+Hello, I am environment 00001001.
+Back in environment 00001000, iteration 0.
+Hello, I am environment 00001002.
+Back in environment 00001001, iteration 0.
+Back in environment 00001000, iteration 1.
+Back in environment 00001002, iteration 0.
+Back in environment 00001001, iteration 1.
+Back in environment 00001000, iteration 2.
+Back in environment 00001002, iteration 1.
+Back in environment 00001001, iteration 2.
+Back in environment 00001000, iteration 3.
+Back in environment 00001002, iteration 2.
+Back in environment 00001001, iteration 3.
+Back in environment 00001000, iteration 4.
+All done in environment 00001000.
+Back in environment 00001002, iteration 3.
+[00001000] exiting gracefully
+[00001000] free env 00001000
+Back in environment 00001001, iteration 4.
+Back in environment 00001002, iteration 4.
+All done in environment 00001001.
+All done in environment 00001002.
+[00001001] exiting gracefully
+[00001001] free env 00001001
+[00001002] exiting gracefully
+[00001002] free env 00001002
+No runnable environments in the system!
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+K> 
+```
+However, when I run `make qemu CPUS=2` again, this result in a general protection or kernel page fault once there are no more runnable environments due to unhandled timer interrupts.
+```
+SMP: CPU 0 found 2 CPU(s)
+enabled interrupts: 1 2
+SMP: CPU 1 starting
+[00000000] new env 00001000
+[00000000] new env 00001001
+[00000000] new env 00001002
+Hello, I am environment 00001000.
+Hello, I am environment 00001001.
+Back in environment 00001000, iteration 0.
+Hello, I am environment 00001002.
+Back in environment 00001001, iteration 0.
+Back in environment 00001000, iteration 1.
+Back in environment 00001001, iteration 1.
+Back in environment 00001002, iteration 0.
+Back in environment 00001000, iteration 2.
+Back in environment 00001001, iteration 2.
+Back in environment 00001002, iteration 1.
+Back in environment 00001000, iteration 3.
+Back in environment 00001001, iteration 3.
+Back in environment 00001002, iteration 2.
+Back in environment 00001000, iteration 4.
+Back in environment 00001001, iteration 4.
+All done in environment 00001000.
+All done in environment 00001001.
+[00001000] exiting gracefully
+[00001000] free env 00001000
+[00001001] exiting gracefully
+[00001001] free env 00001001
+Back in environment 00001002, iteration 3.
+TRAP frame at 0xf023bfbc from CPU 1
+  edi  0xf028f0c0
+  esi  0x00000000
+  ebp  0x00000000
+  oesp 0xf023bfdc
+  ebx  0xf028f000
+  edx  0xf022b094
+  ecx  0x00000002
+  eax  0xf023c000
+  es   0x----0010
+  ds   0x----0010
+  trap 0x00000020 Hardware Interrupt
+  err  0x00000000
+  eip  0xf01040d0
+  cs   0x----0008
+  flag 0x00000206
+kernel panic on CPU 1 at kern/trap.c:230: unhandled trap in kernel
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+K> 
+```
+
+**Why ?**
+---
+
+**Question**
+---
+> Why can the pointer e be dereferenced both before and after the addressing switch?
+
+Because the kernel part of vm of all environments are identical.
+
+
+> Whenever the kernel switches from one environment to another, it must ensure the old environment's registers are saved so they can be restored properly later. Why? Where does this happen?
+
+In trap.c
+```
+// Copy trap frame (which is currently on the stack)
+// into 'curenv->env_tf', so that running the environment
+// will restart at the trap point.
+curenv->env_tf = *tf;
+```
 ### System Calls for Enviroment Creation
 
+The new system calls you will write for JOS are as follows:
+- **sys_exofork**
+- **sys_env_set_status**
+- **sys_page_alloc**
+- **sys_page_map**
+- **sys_page_unmap**
+
+**Exercise 7**
+
+>  Implement the system calls described above in `kern/syscall.c`. 
+
+Here is the code I wrote for `sys_exofork`. It Create the new environment with `env_alloc()`, from kern/env.c. It should be left as env_alloc created it, except that status is set to `ENV_NOT_RUNNABLE`, and the register set is copied from the current environment.
+
+```c
+static envid_t
+sys_exofork(void)
+{
+	int r;
+	struct Env *e;
+	if ((r = env_alloc(&e, curenv->env_id)) < 0)
+		return r;
+	e->env_status = ENV_NOT_RUNNABLE;
+	e->env_tf = curenv->env_tf;
+	return e->env_id;
+}
+```
+And with other functions written, run `make qemu`, it turns out `page fault` ! What's wrong ?
+
+```
+SMP: CPU 0 found 1 CPU(s)
+enabled interrupts: 1 2
+[00000000] new env 00001000
+[00001000] new env 00001001
+0: I am the parent!
+[00001001] user panic in <unknown> at user/dumbfork.c:32: sys_page_alloc: bad environment
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+TRAP frame at 0xf029007c from CPU 0
+  edi  0x00000000
+  esi  0x008011ad
+  ebp  0xeebfdf60
+  oesp 0xf0234fdc
+  ebx  0xeebfdf74
+  edx  0xeebfde18
+  ecx  0x00000001
+  eax  0x00000001
+  es   0x----0023
+  ds   0x----0023
+  trap 0x00000003 Breakpoint
+  err  0x00000000
+  eip  0x00800277
+  cs   0x----001b
+  flag 0x00000082
+  esp  0xeebfdf58
+  ss   0x----0023
+K> 
+```
+
+**Great Bug!!!**
+---
+
+You should add 
+```
+	e->env_tf.tf_regs.reg_eax = 0;
+```
+in `sys_exofork` before you return!
+
+And This finish part A of lab4.
+```
+SMP: CPU 0 found 1 CPU(s)
+enabled interrupts: 1 2
+[00000000] new env 00001000
+[00001000] new env 00001001
+0: I am the parent!
+0: I am the child!
+1: I am the parent!
+1: I am the child!
+2: I am the parent!
+2: I am the child!
+3: I am the parent!
+3: I am the child!
+4: I am the parent!
+4: I am the child!
+5: I am the parent!
+5: I am the child!
+6: I am the parent!
+6: I am the child!
+7: I am the parent!
+7: I am the child!
+8: I am the parent!
+8: I am the child!
+9: I am the parent!
+9: I am the child!
+[00001000] exiting gracefully
+[00001000] free env 00001000
+10: I am the child!
+11: I am the child!
+12: I am the child!
+13: I am the child!
+14: I am the child!
+15: I am the child!
+16: I am the child!
+17: I am the child!
+18: I am the child!
+19: I am the child!
+[00001001] exiting gracefully
+[00001001] free env 00001001
+No runnable environments in the system!
+Welcome to the JOS kernel monitor!
+Type 'help' for a list of commands.
+K> 
+```
+
 ## Part B: Copy-on-Write Fork
+
 
 ### User-level page fault handling
 
@@ -159,3 +456,5 @@ to kernel stack before checking the lock. So it will just mess up.
 ### Clock Interrupts and Preemption
 
 ### Inter-Process Communication(IPC)
+
+
