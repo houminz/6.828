@@ -392,11 +392,56 @@ K>
 **Great Bug!!!**
 ---
 
-You should add 
+We need to know how `dubmfork` works first.
+```c
+envid_t
+dumbfork(void)
+{
+	envid_t envid;
+	uint8_t *addr;
+	int r;
+	extern unsigned char end[];
+
+	envid = sys_exofork();
+	if (envid < 0)
+		panic("sys_exofork: %e", envid);
+	if (envid == 0) {
+		// We're the child.
+		// The copied value of the global variable 'thisenv'
+		// is no longer valid (it refers to the parent!).
+		// Fix it and return 0.
+		thisenv = &envs[ENVX(sys_getenvid())];
+		return 0;
+	}
+
+	// We're the parent.
+	// Eagerly copy our entire address space into the child.
+	// This is NOT what you should do in your fork implementation.
+
+	for (addr = (uint8_t*) UTEXT; addr < end; addr += PGSIZE)
+		duppage(envid, addr);
+
+	// Also copy the stack we are currently running on.
+	duppage(envid, ROUNDDOWN(&addr, PGSIZE));
+
+	// Start the child environment running
+	if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
+		panic("sys_env_set_status: %e", r);
+
+	return envid;
+}
+```
+
+When we call dumbfork in umain
+```
+	who = dumbfork();
+```
+dumbfork call `sys_exofork` to allocate a new child enviroment. The kernel will initialize it with a copy of our register state, which means the child enviroment's return address is exaclty the same as the parent enviroment. But its status is not runnable. After `sys_exofork` returns with the child enviroment's envid, we're the parent. The parent set the child's status to `ENV_RUNNABLE` and copy the their entire address space into the child. The parent then return to `umain` and print `0: I am the parent!`. After this, it call `sys_yield` to schedule round-robin to run the child enviroment. During `env_run` the kernel call `env_pop_tf` to pop the register value to register, and we return to `envid = sys_exofork();` at `dumbfork`. Right now, we expect the envid to be 0, which is the value of `eax`. To realize this, we should add this in `sys_exofork` before we return!
 ```
 	e->env_tf.tf_regs.reg_eax = 0;
 ```
-in `sys_exofork` before you return!
+Now we are the child, and we return to `umain`. This is how fork realize `call once, return twice`.
+
 
 And This finish part A of lab4.
 ```
@@ -449,12 +494,198 @@ K>
 
 ### User-level page fault handling
 
+#### Setting the Page Fault Handler
+
+**Exercise 8**
+---
+> Implement the `sys_env_set_pgfault_upcall` system call.
+
+```c
+static int
+sys_env_set_pgfault_upcall(envid_t envid, void *func)
+{
+	// LAB 4: Your code here.
+	int r;
+	struct Env *e;
+
+	if ((r = envid2env(envid, &e, 1)) < 0)
+		return r;
+
+	e->env_pgfault_upcall = func;
+	return 0;
+}
+```
+#### Normal and Exception Stacks in User Environments
+
+
+The JOS user exception stack is also one page in size, and its top is defined to be at virtual address UXSTACKTOP, so the valid bytes of the user exception stack are from UXSTACKTOP-PGSIZE through UXSTACKTOP-1 inclusive. While running on this exception stack, the user-level page fault handler can use JOS's regular system calls to map new pages or adjust mappings so as to fix whatever problem originally caused the page fault. Then the user-level page fault handler returns, via an assembly language stub, to the faulting code on the original stack.
+
+#### Invoking the User Page Fault Handler
+
+**Exercise 9** 
+---
+> Implement the code in `page_fault_handler` in kern/trap.c required to dispatch page faults to the user-mode handler. 
+
+We need to understand how all of this works first. When there is a page fault from user mode, the processor switches to the kernel stack and pushes old SS, ESP, ESP, EFLAGS, CS and EIP. Then it sets CS:EIP to point to the handler function described by the entry which is set by IDT. Then we push other registers value into the stack to form a Trapframe. After this, we call `trap` in `kern/trap.c` 
+
+In the function `trap`, we dispatch based on what type of trap occurred by `trap_dispatch`. Then we find that it is a `T_PGFLT` trap, so we go to `page_fault_handler`.
+
+In the function `page_fault_handler`, we find that the page fault happenred in user mode. Up to now, the state of the user enviroment at the time of the fault, i.e. `trap-time` state is stored in the `tf` parament of `page_fault_handler`. We need to set up a trap frame on the exception stack that looks like a struct `UTrapframe` from inc/trap.h:
+
+```
+                    <-- UXSTACKTOP
+trap-time esp
+trap-time eflags
+trap-time eip
+trap-time eax       start of struct PushRegs
+trap-time ecx
+trap-time edx
+trap-time ebx
+trap-time esp
+trap-time ebp
+trap-time esi
+trap-time edi       end of struct PushRegs
+tf_err (error code)
+fault_va            <-- %esp when handler is run
+```
+How to do this? we need to get the address of the UTrapframe, and then set the correct value to it.
+Here is the code
+```c
+struct UTrapframe *utf = (struct UTrapframe *)utf_addr;
+
+utf->utf_fault_va = fault_va;
+utf->utf_err = tf->tf_err;
+utf->utf_regs = tf->tf_regs;
+utf->utf_eip = tf->tf_eip;
+utf->utf_eflags = tf->tf_eflags;
+utf->utf_esp = tf->tf_esp;
+
+```
+
+The question is how to get the `utf_addr`. If it the first time we face user level page fault, `utf_addr` is just `UTrapframe` size below `UXSTACKTOP`. However, The page fault upcall might cause another page fault, in which case we branch to the page fault upcall recursively, pushing another page fault stack frame on top of the user exception stack.  That means If the user environment is already running on the user exception stack when an exception occurs, then the page fault handler itself has faulted. In this case, you should start the new stack frame just under the current tf->tf_esp rather than at UXSTACKTOP. You should first push an empty 32-bit word, then a struct UTrapframe.
+
+To test whether tf->tf_esp is already on the user exception stack, check whether it is in the range between UXSTACKTOP-PGSIZE and UXSTACKTOP-1, inclusive.
+
+Here is the code
+```c
+uintptr_t utf_addr;
+if(UXSTACKTOP-PGSIZE <= tf->tf_esp && tf->tf_esp <= UXSTACKTOP-1)
+	utf_addr = tf->tf_esp - sizeof(struct UTrapframe) - 4;
+else
+	utf_addr = UXSTACKTOP - sizeof(struct UTrapframe);
+user_mem_assert(curenv, (void *)utf_addr, 1, PTE_W);
+```
+
+The kernel then arranges for the user environment to resume execution with the page fault handler running on the exception stack with this stack frame. 
+
+How to do this? 
+
+From the hint we know `env_run` is useful. Since we are still in kernel mode now, we can call env_run to drop into user mode and resume execution. But we need to execute the page fault handler, not the environment itself. On the other hand, the stack is not `USTACKTOP` now, we are in the exception stack now. We need to pass the `UTrapframe` pointer as function argument. With the `iret` instruction, we set eip to the page fault handler and change the stack pointer to the UTrapframe.
+
+Here is the code
+```
+curenv->env_tf.tf_eip = (uintptr_t)curenv->env_pgfault_upcall;
+curenv->env_tf.tf_esp = utf_addr;
+env_run(curenv);
+```
+
+#### User-mode Page Fault Entrypoint
+Next, you need to implement the assembly routine that will take care of calling the C page fault handler and resume execution at the original faulting instruction. This assembly routine is the handler that will be registered with the kernel using `sys_env_set_pgfault_upcall()`.
+
+**Exercise 10**
+---
+> Implement the `_pgfault_upcall` routine in lib/pfentry.S. The interesting part is returning to the original point in the user code that caused the page fault. You'll return directly there, without going back through the kernel. The hard part is simultaneously switching stacks and re-loading the EIP.
+
+As we have known, we call `env_run` to run `curenv->env_pgfault_upcall` which is set using `sys_env_set_pgfault_upcall`. Actually rather than register C page fault handler directly with the kernel as the page fault handler, we register the assembly language wrapper in pfentry.S, which is `_pgfault_upcall`
+
+At first, we enter `_pgfault_upcall` and call `_pgfault_handler`, this deal with the page fault. 
+```
+_pgfault_upcall:
+	// Call the C page fault handler.
+	pushl %esp			// function argument: pointer to UTF
+	movl _pgfault_handler, %eax
+	call *%eax
+	addl $4, %esp			// pop function argument
+```
+After this done, we need to resume excution of original enviroment, which means to start from where we trap. This can be done using `ret` instruction if we are now at trap-time stack and the top of the stack is the trap-time eip. To do this, we should first push trap-time eip to trap-time stack.
+```
+movl 0x28(%esp), %eax	// trap-time eip
+movl 0x30(%esp), %ebx	// trap-time esp
+subl $0x4, (%ebx)	
+movl %eax, (%ebx)		
+addl $0x8, %esp			// skip fault_va and error code
+```
+Then we need to restore the trap-time registers and eflags
+```
+popal
+addl $4, %esp
+popfl		
+```
+
+Finally we switch back to the adjusted trap-time stack and return to re-execute the instruction that faulted.
+```
+popl %esp
+ret
+```
+**Exercise 11**
+---
+> Finish `set_pgfault_handler()` in lib/pgfault.c
+
+```c
+void
+set_pgfault_handler(void (*handler)(struct UTrapframe *utf))
+{
+	int r;
+
+	if (_pgfault_handler == 0) {
+		// First time through!
+		if((sys_page_alloc(curenv->env_id, (void *)(UXSTACKTOP - PGSIZE), PTE_U | PTE_W | PTE_P) < 0)
+			panic("set_pgfault_handler: sys_page_alloc error\n");
+	}
+
+	// Save handler pointer for assembly to call.
+	_pgfault_handler = handler;
+	if((sys_env_set_pgfault_upcall(0, _pgfault_upcall)) < 0)
+		panic("set_pgfault_handler: sys_env_set_pgfault_upcall error\n");
+}
+```
+#### Testing
+
+
 ### Implementing Copy-on-Write Fork
+
+**Exercise 12**
+> Implement fork, duppage and pgfault in lib/fork.c
 
 ## Part C: Preemptive Multitasking and Inter-Process Communication(IPC)
 
 ### Clock Interrupts and Preemption
 
+#### Interrupt discipline
+
+**Exercise 13** 
+--- 
+> Modify kern/trapentry.S and kern/trap.c to initialize the appropriate entries in the IDT and provide handlers for IRQs 0 through 15
+
+#### Handling Clock Interrupts
+
+**Exercise 14**
+---
+> Modify the kernel's trap_dispatch() function so that it calls sched_yield() to find and run a different environment whenever a clock interrupt takes place.
+
 ### Inter-Process Communication(IPC)
 
+#### IPC in JOS
 
+#### Sending and Receiving Messages
+
+#### Transferring Pages
+
+#### Implementing IPC
+
+**Exercise 15**
+---
+> Implement `sys_ipc_recv` and `sys_ipc_try_send` in kern/syscall.c
+
+
+## This ends part C
