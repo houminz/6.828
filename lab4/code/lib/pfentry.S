@@ -66,8 +66,8 @@ _pgfault_upcall:
 	//
 	// LAB 4: Your code here.
 	movl 0x28(%esp), %eax	// trap-time eip
-	movl 0x30(%esp), %ebx	// trap-time esp
-	subl $0x4, (%ebx)		// we need to sub trap-time esp since we push eip to trap-time stack now
+	subl $0x4, 0x30(%esp)	// we have to use subl now because we can't use after popfl
+	movl 0x30(%esp), %ebx   // trap-time esp-4
 	movl %eax, (%ebx)		// push trap-time eip to trap-time stack
 	addl $0x8, %esp			// skip fault_va and error code
 

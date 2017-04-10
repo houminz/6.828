@@ -14,7 +14,7 @@ In an SMP system, each CPU has an accompanying local `APIC` (LAPIC) unit. The `L
 > Implement `mmio_map_region` in kern/pmap.c.
 
 We should not simply `ROUNDUP(size, PGSIZE)` but `size+pa` instead.
-```
+```c
 void *
 mmio_map_region(physaddr_t pa, size_t size)
 {
@@ -45,7 +45,7 @@ Before booting up APs, the BSP should first collect information about the multip
 >  modify your implementation of `page_init()` in kern/pmap.c to avoid adding the page at MPENTRY_PADDR to the free list
 
 Just change the upper boundary.
-```
+```c
 	for(i = 1; i < MPENTRY_PADDR/PGSIZE; i++)
 	{
 		pages[i].pp_ref = 0;
@@ -96,7 +96,7 @@ But it did not pass the check. I had thought now that we have a KSTKSIZE `bootst
 > The code in `trap_init_percpu()` (kern/trap.c) initializes the TSS and TSS descriptor for the BSP. It worked in Lab 3, but is incorrect when running on other CPUs. Change the code so that it can work on all CPUs.
 
 we should change the original code to adapt to different cpu.
-```
+```c
 void
 trap_init_percpu(void)
 {
@@ -599,7 +599,7 @@ Next, you need to implement the assembly routine that will take care of calling 
 As we have known, we call `env_run` to run `curenv->env_pgfault_upcall` which is set using `sys_env_set_pgfault_upcall`. Actually rather than register C page fault handler directly with the kernel as the page fault handler, we register the assembly language wrapper in pfentry.S, which is `_pgfault_upcall`
 
 At first, we enter `_pgfault_upcall` and call `_pgfault_handler`, this deal with the page fault. 
-```
+```asm
 _pgfault_upcall:
 	// Call the C page fault handler.
 	pushl %esp			// function argument: pointer to UTF
@@ -608,7 +608,7 @@ _pgfault_upcall:
 	addl $4, %esp			// pop function argument
 ```
 After this done, we need to resume excution of original enviroment, which means to start from where we trap. This can be done using `ret` instruction if we are now at trap-time stack and the top of the stack is the trap-time eip. To do this, we should first push trap-time eip to trap-time stack.
-```
+```asm
 movl 0x28(%esp), %eax	// trap-time eip
 movl 0x30(%esp), %ebx	// trap-time esp
 subl $0x4, (%ebx)	
@@ -616,14 +616,14 @@ movl %eax, (%ebx)
 addl $0x8, %esp			// skip fault_va and error code
 ```
 Then we need to restore the trap-time registers and eflags
-```
+```asm
 popal
 addl $4, %esp
 popfl		
 ```
 
 Finally we switch back to the adjusted trap-time stack and return to re-execute the instruction that faulted.
-```
+```asm
 popl %esp
 ret
 ```
@@ -651,6 +651,52 @@ set_pgfault_handler(void (*handler)(struct UTrapframe *utf))
 ```
 #### Testing
 
+It is ok when we run `user/faultread` and `user/faultdie`, but when we run `user/faultalloc`, it did not turn out to be what we expect, but like this
+
+```
+SMP: CPU 0 found 1 CPU(s)
+enabled interrupts: 1 2
+[00000000] new env 00001000
+fault deadbeef
+this string was faulted in at deadbeef
+fault cafebffe
+fault cafec000
+fault 69
+TRAP frame at 0xf0290000 from CPU 0
+  edi  0x008010ef
+  esi  0x30b57cec
+  ebp  0x00800360
+  oesp 0xf0234fdc
+  ebx  0xeebfff6c
+  edx  0xcafec000
+  ecx  0xcafec001
+  eax  0x00000069
+  es   0x----0023
+  ds   0x----0023
+  trap 0x0000000d General Protection
+  err  0x00000000
+  eip  0x00000072
+  cs   0x----001b
+  flag 0x00000803
+  esp  0xeebfff10
+  ss   0x----0023
+[00001000] free env 00001000
+```
+**Great BUG!!!**
+What is the problem? When I allocate a page at 0xcafec000 and 
+```c
+snprintf((char*) addr, 100, "this string was faulted in at %x", addr);
+```
+It is ok to return to `_pgfault_upcall` to re-execute the first page fault at 0xcafebffe. To return to the trap-time state we push trap-time eip to that trap-time stack. However, our code above have not change the stack pointer yet. We need to change code like this.
+```asm
+movl 0x28(%esp), %eax	// trap-time eip
+subl $0x4, 0x30(%esp)	// we have to use subl now because we can't use after popfl
+movl 0x30(%esp), %ebx   // trap-time esp-4
+movl %eax, (%ebx)		// push trap-time eip to trap-time stack 
+addl $0x8, %esp			// skip fault_va and error code
+```
+
+After we get 50/80.
 
 ### Implementing Copy-on-Write Fork
 
