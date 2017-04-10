@@ -696,12 +696,116 @@ movl %eax, (%ebx)		// push trap-time eip to trap-time stack
 addl $0x8, %esp			// skip fault_va and error code
 ```
 
-After we get 50/80.
+After this we get 50/80.
 
 ### Implementing Copy-on-Write Fork
 
 **Exercise 12**
-> Implement fork, duppage and pgfault in lib/fork.c
+> Implement `fork`, `duppage` and `pgfault` in lib/fork.c
+
+What will `fork` do?
+
+- The parent installs `pgfault()` as the C-level page fault handler
+```c
+set_pgfault_handler(pgfault);
+```
+- The parent calls `sys_exofork()` to create a child enviroment
+```c
+envid = sys_exofork();
+if (envid < 0)
+	panic("sys_exofork: %e", envid);
+if (envid == 0) {
+	// We're the child.
+	// The copied value of the global variable 'thisenv'
+	// is no longer valid (it refers to the parent!).
+	// Fix it and return 0.
+	thisenv = &envs[ENVX(sys_getenvid())];
+	return 0;
+}
+```
+- for each writable or copy-on-write page in its address space below UTOP, the parent calls `duppage`, which should map the page copy-on-write into the address space for the child and then *remap* the page copy-on-write in its own address space. 
+```c
+for (addr = 0; addr < USTACKTOP; addr += PGSIZE)
+	if((uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_U))
+		duppage(envid, PGNUM(addr));
+```
+
+Note, we need to check uvpd present first to avoid page fault in accessing uvpt.
+
+- `duppage` sets both PTEs so that the page is not writable, and to contain PTE_COW in the `avail` field to distinguish copy-on-write pages from genuine read-only pages.
+
+```c
+static int
+duppage(envid_t envid, unsigned pn)
+{
+	int r;
+
+	// LAB 4: Your code here.
+	void* addr = (void *)(pn * PGSIZE);
+	if((uvpt[pn] & PTE_COW) || (uvpt[pn] & PTE_W))
+	{
+		r = sys_page_map(0, addr, envid, addr, PTE_COW | PTE_U | PTE_P);
+		if(r < 0)
+			panic("duppage: sys_page_map fail\n");
+		r = sys_page_map(0, addr, 0, addr, PTE_COW | PTE_U | PTE_P);
+		if(r < 0)
+			panic("duppage: sys_page_map fail\n");
+	}
+	else
+	{
+		r = sys_page_map(0, addr, envid, addr, PTE_U | PTE_P);
+		if(r < 0)
+			panic("duppage: sys_page_map fail\n");
+	}
+
+	return 0;
+}
+```
+- The exception stack is not remapped this way, however. Instead you need to allocate a fresh page in the child for the exception stack. Since the page fault handler will be doing the actual copying and the page fault handler runs on the exception stack, the exception stack cannot be made copy-on-write
+```c
+// allocate a new page for the child's user exception stack.
+if((r = sys_page_alloc(envid, (void *)(UXSTACKTOP - PGSIZE), PTE_U | PTE_W | PTE_P)) < 0)
+	panic("sys_page_alloc: %e", r);
+```
+- The parent sets the user page fault entrypoint for the child to look like its own
+```c
+extern void _pgfault_upcall();
+sys_env_set_pgfault_upcall(envid, _pgfault_upcall);
+```
+- The child is now ready to run, so the parent marks it runnable
+```c
+if ((r = sys_env_set_status(envid, ENV_RUNNABLE)) < 0)
+	panic("sys_env_set_status: %e", r);
+```
+
+**Question: How UVPT/UVPD works ?**
+---
+
+Remember how the x86 translates virtual addresses into physical ones, CR3 points at the page directory. The PDX part of the address indexes into the page directory to give you a page table. The PTX part indexes into the page table to give you a page, and then you add the low bits in.
+
+How page fault work to realize copy-on-write?
+- The kernel propagates the page fault to _pgfault_upcall, which calls fork()'s pgfault() handler.
+
+- pgfault() checks that the fault is a write (check for FEC_WR in the error code) and that the PTE for the page is marked PTE_COW. If not, panic.
+```c
+if (!((err & FEC_WR) && (uvpt[PGNUM(addr)] & PTE_COW) && (uvpd[PDX(addr)] & PTE_P) && (uvpt[PGNUM(addr)] & PTE_P)))
+	panic("pgfault: not copy-on-write\n");
+```
+- pgfault() allocates a new page mapped at a temporary location and copies the contents of the faulting page into it. Then the fault handler maps the new page at the appropriate address with read/write permissions, in place of the old read-only mapping.
+```c
+r = sys_page_alloc(0, (void *)PFTEMP, PTE_U | PTE_W | PTE_P);
+if (r < 0)
+	panic("pgfault: sys_page_alloc fail\n");
+memcpy(PFTEMP, ROUNDDOWN(addr, PGSIZE), PGSIZE);
+r = sys_page_map(0, (void *)PFTEMP, 0, ROUNDDOWN(addr, PGSIZE), PTE_U | PTE_W | PTE_P);
+if (r < 0)
+	panic("pgfault: sys_page_map fail\n");
+r = sys_page_unmap(0, (void *)PFTEMP);
+if (r < 0)
+	panic("pgfault: sys_page_unmap fail\n");
+```
+
+This finishs partB.
 
 ## Part C: Preemptive Multitasking and Inter-Process Communication(IPC)
 
