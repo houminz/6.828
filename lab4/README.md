@@ -810,22 +810,49 @@ This finishs partB.
 ## Part C: Preemptive Multitasking and Inter-Process Communication(IPC)
 
 ### Clock Interrupts and Preemption
+In order to allow the kernel to preempt a running environment, forcefully retaking control of the CPU from it, we must extend the JOS kernel to support external hardware interrupts from the clock hardware.
 
 #### Interrupt discipline
+
 
 **Exercise 13** 
 --- 
 > Modify kern/trapentry.S and kern/trap.c to initialize the appropriate entries in the IDT and provide handlers for IRQs 0 through 15
 
+This has been done in lab3
+
+> Then modify the code in env_alloc() in kern/env.c to ensure that user environments are always run with interrupts enabled.
+
+Just add this line 
+```c
+// Enable interrupts while in user mode.
+// LAB 4: Your code here.
+e->env_tf.tf_eflags |= FL_IF;
+```
+
 #### Handling Clock Interrupts
 
 **Exercise 14**
 ---
-> Modify the kernel's trap_dispatch() function so that it calls sched_yield() to find and run a different environment whenever a clock interrupt takes place.
+> Modify the kernel's `trap_dispatch()` function so that it calls sched_yield() to find and run a different environment whenever a clock interrupt takes place.
+
+Follew the guide
+```c
+// Handle clock interrupts. Don't forget to acknowledge the
+// interrupt using lapic_eoi() before calling the scheduler!
+case IRQ_OFFSET + IRQ_TIMER:
+	lapic_eoi();
+	sched_yield();
+	return ;
+```
+
+Till now we get 65/80.
 
 ### Inter-Process Communication(IPC)
 
 #### IPC in JOS
+
+The "messages" that user environments can send to each other using JOS's IPC mechanism consist of two components: a single 32-bit value, and optionally a single page mapping. Allowing environments to pass page mappings in messages provides an efficient way to transfer more data than will fit into a single 32-bit integer, and also allows environments to set up shared memory arrangements easily.
 
 #### Sending and Receiving Messages
 
@@ -837,5 +864,112 @@ This finishs partB.
 ---
 > Implement `sys_ipc_recv` and `sys_ipc_try_send` in kern/syscall.c
 
+```c
+static int
+sys_ipc_try_send(envid_t envid, uint32_t value, void *srcva, unsigned perm)
+{
+	// LAB 4: Your code here.
+	int r;
+	struct Env *e;
+	struct PageInfo *pp;
+	pte_t *ptep;
+
+	if ((r = envid2env(envid, &e, 0)) < 0)
+		return r;
+
+	if (e->env_ipc_recving == 0)
+		return -E_IPC_NOT_RECV;
+
+	pp = page_lookup(curenv->env_pgdir, srcva, &ptep);
+
+	if (((uint32_t)srcva < UTOP) && (((uint32_t)srcva & 0xFFF) != 0))
+		return -E_INVAL;
+
+	if (((uint32_t)srcva < UTOP) && ((perm | PTE_SYSCALL) != PTE_SYSCALL))
+		return -E_INVAL;
+
+	if (((uint32_t)srcva < UTOP) && (pp == NULL))
+		return -E_INVAL;
+
+
+	if (!((*ptep) & PTE_W) && (perm & PTE_W))
+		return -E_INVAL;
+
+	e->env_ipc_perm = 0;
+	if (((uint32_t)srcva < UTOP) && ((uint32_t)e->env_ipc_dstva < UTOP))
+	{
+		if ((r = page_insert(e->env_pgdir, pp, e->env_ipc_dstva, perm)) < 0)
+			return r;
+		e->env_ipc_perm = perm;
+
+	}
+	e->env_ipc_recving = 0;
+	e->env_ipc_value = value;
+	e->env_ipc_from = curenv->env_id;
+	e->env_status = ENV_RUNNABLE;
+	return 0;
+}
+```
+
+```c
+static int
+sys_ipc_recv(void *dstva)
+{
+	// LAB 4: Your code here.
+	if (((uint32_t)dstva < UTOP) && (((uint32_t)dstva & 0xFFF) != 0))
+		return -E_INVAL;
+
+	curenv->env_ipc_recving = 1;
+	curenv->env_ipc_dstva = dstva;
+	curenv->env_status = ENV_NOT_RUNNABLE;
+	sched_yield();
+
+	return 0;
+}
+```
+Notice that when we call `sys_ip_recv`, the enviroment we now running is blocked until a value. Thus we call `sched_yield` to the sending enviroment to send the value. When the receiving enviroment get scheduled again, the value is ready and the system call will eventually return 0 on success.
+
+```c
+void
+ipc_send(envid_t to_env, uint32_t val, void *pg, int perm)
+{
+	// LAB 4: Your code here.
+	int r;
+	if (pg == NULL)
+		pg = (void *)UTOP;
+	while(1) {
+		r = sys_ipc_try_send(to_env, val, pg, perm);
+		if (r == 0)
+			break;
+		if(r < 0 && r != -E_IPC_NOT_RECV)
+			panic("ipc_send: send fail, %e\n", r);
+		sys_yield();
+	}
+}
+```
+Notice that if `E_IPC_NOT_RECV`, we can use `sys_yield` to schedule to the receive enviroment to be CPU-friendly.
+
+```c
+int32_t
+ipc_recv(envid_t *from_env_store, void *pg, int *perm_store)
+{
+	// LAB 4: Your code here.
+	if (pg == NULL)
+		pg = (void *)UTOP;
+	int r = sys_ipc_recv(pg);
+	if (r < 0) {
+		if (from_env_store != NULL)
+			*from_env_store = 0;
+		if (perm_store != NULL)
+			*perm_store = 0;
+		return r;
+	}
+	if (from_env_store != NULL)
+		*from_env_store = thisenv->env_ipc_from;
+	if (perm_store != NULL)
+		*perm_store = thisenv->env_ipc_perm;
+	return thisenv->env_ipc_value;
+}
+```
 
 ## This ends part C
