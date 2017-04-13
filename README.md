@@ -1,5 +1,5 @@
 ## Intro
-This semester (Spring 2017), I am taking a OS implementation class at Peking University under professor Chen's guide. The class is based on material of [MIT 6.828](https://pdos.csail.mit.edu/6.828/2014/). We are going to write an exokernel-style operating systems kernel names **JOS** under **x86** platform and then port it to **ARM** architecture. This repository is here to record my steps to implement the system. At the end of the project, the repo should have 7 branches, with a master branch and one branch for each lab.
+This semester (Spring 2017), I am taking a OS implementation class at Peking University under professor Chen's guide. The class is based on material of [MIT 6.828](https://pdos.csail.mit.edu/6.828/2014/). We are going to write an exokernel-style operating systems kernel names **JOS** under **x86** platform and then port it to **ARM** architecture. This repository is here to record my steps to implement the system.
 
 Note, this is my last course of my undergradute age, not any more :)
 
