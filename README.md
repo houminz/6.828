@@ -5,7 +5,7 @@ Note, this is my last course of my undergradute age, not any more :)
 
 ## Development Logs
 
-### Lab1: [Booting](https://github.com/SimpCosm/jos/tree/master/lab1)
+### lab1: [Booting](https://github.com/SimpCosm/jos/tree/master/lab1)
 
 | Requirement 	 | Status       | Date         |
 | :-------------:| :----------: | :----------: |
@@ -49,5 +49,10 @@ Note, this is my last course of my undergradute age, not any more :)
 | Challenge 4    | NA           | NA		   |
 
 ### lab5: File System, Spawn and Shell
+
+| Requirement 	 | Status       | Date         |
+| :-------------:| :----------: | :----------: |
+| Exercises      | Passed       | 14/04/2017   |
+
 
 ### lab6: Network Driver
